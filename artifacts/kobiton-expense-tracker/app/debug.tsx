@@ -64,6 +64,25 @@ export default function DebugScreen() {
     showToast(`Loaded ${samples.length} sample expenses`);
   }
 
+  function handleCrash() {
+    Alert.alert(
+      'Crash Application',
+      'This will intentionally crash the app to test crash reporting and recovery. Continue?',
+      [
+        {
+          text: 'Crash Now',
+          style: 'destructive',
+          onPress: () => {
+            setTimeout(() => {
+              throw new Error('[Kobiton] Intentional crash triggered from dev tools — crash reporting test');
+            }, 100);
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  }
+
   async function handleClearAll() {
     Alert.alert('Clear All Expenses', 'This will delete all expenses. Are you sure?', [
       {
@@ -147,6 +166,17 @@ export default function DebugScreen() {
             title="Clear All Expenses"
             subtitle="Delete all stored expenses from local storage"
             onPress={handleClearAll}
+            danger
+          />
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Crash Testing</Text>
+          <DebugRow
+            icon="zap"
+            title="Crash Application"
+            subtitle="Throws an unhandled exception to test crash reporting"
+            onPress={handleCrash}
             danger
           />
         </View>

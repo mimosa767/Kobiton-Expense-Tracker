@@ -3,6 +3,7 @@ import {
   Alert,
   FlatList,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -60,17 +61,8 @@ export default function ExpensesScreen() {
 
   async function handleLogout() {
     setShowMenu(false);
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
-      {
-        text: 'Logout',
-        style: 'destructive',
-        onPress: async () => {
-          await logout();
-          router.replace('/login');
-        },
-      },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    await logout();
+    router.replace('/login');
   }
 
   function handleVersionTap() {
@@ -89,21 +81,26 @@ export default function ExpensesScreen() {
 
   const bottomPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
-  const menuActions = (
-    <>
-      {showMenu && (
-        <TouchableOpacity style={styles.overlay} onPress={() => setShowMenu(false)} />
-      )}
-      {showMenu && (
-        <View style={styles.dropdownMenu}>
-          <TouchableOpacity style={styles.menuItem} onPress={handleLogout}>
-            <Feather name="log-out" size={16} color={Colors.error} />
-            <Text style={[styles.menuItemText, { color: Colors.error }]}>Logout</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </>
-  );
+  const menuActions = showMenu ? (
+    <Pressable
+      style={styles.overlay}
+      onPress={() => setShowMenu(false)}
+      testID="menu-overlay"
+    >
+      <Pressable style={styles.dropdownMenu} onPress={() => {}}>
+        <TouchableOpacity
+          style={styles.menuItem}
+          onPress={handleLogout}
+          testID="logout-button"
+          accessibilityRole="button"
+          accessibilityLabel="Logout"
+        >
+          <Feather name="log-out" size={16} color={Colors.error} />
+          <Text style={[styles.menuItemText, { color: Colors.error }]}>Logout</Text>
+        </TouchableOpacity>
+      </Pressable>
+    </Pressable>
+  ) : null;
 
   return (
     <View style={styles.root}>
@@ -182,7 +179,7 @@ const styles = StyleSheet.create({
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 10,
+    zIndex: 50,
   },
   dropdownMenu: {
     position: 'absolute',
@@ -191,7 +188,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
     ...Shadow.card,
-    zIndex: 20,
     minWidth: 180,
     overflow: 'hidden',
   },

@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Feather } from '@expo/vector-icons';
-import { Colors, Radius, Shadow, Typography } from '../constants/theme';
+import { Colors, Radius, Shadow, Spacing, Typography } from '../constants/theme';
 
 interface Props {
   uri: string | null;
@@ -22,18 +22,18 @@ interface Props {
 export function ReceiptPicker({ uri, name, onChange, testID }: Props) {
   async function pickFromCamera() {
     if (Platform.OS === 'web') {
-      Alert.alert('Camera', 'Camera is not supported on web.');
+      Alert.alert('Camera Unavailable', 'Camera capture is not supported in web browsers. Please use the Gallery option to upload an image from your device.');
       return;
     }
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert('Permission Required', 'Camera access is needed to take a photo.');
+      Alert.alert('Permission Required', 'Camera access is needed to take a photo. Please enable it in your device settings.');
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.7,
-      allowsEditing: false,
+      quality: 0.8,
+      allowsEditing: true,
     });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
@@ -45,12 +45,12 @@ export function ReceiptPicker({ uri, name, onChange, testID }: Props) {
   async function pickFromGallery() {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert('Permission Required', 'Gallery access is needed to select a photo.');
+      Alert.alert('Permission Required', 'Photo library access is needed to select an image. Please enable it in your device settings.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.7,
+      quality: 0.8,
       allowsEditing: false,
     });
     if (!result.canceled && result.assets[0]) {
@@ -60,16 +60,8 @@ export function ReceiptPicker({ uri, name, onChange, testID }: Props) {
     }
   }
 
-  function handleAttach() {
-    Alert.alert('Add Receipt', 'Choose how to add a receipt', [
-      { text: 'Take Photo', onPress: pickFromCamera },
-      { text: 'Choose from Gallery', onPress: pickFromGallery },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  }
-
   function handleRemove() {
-    Alert.alert('Remove Receipt', 'Are you sure you want to remove this receipt?', [
+    Alert.alert('Remove Attachment', 'Remove this receipt image?', [
       { text: 'Remove', style: 'destructive', onPress: () => onChange(null, null) },
       { text: 'Cancel', style: 'cancel' },
     ]);
@@ -84,67 +76,141 @@ export function ReceiptPicker({ uri, name, onChange, testID }: Props) {
           resizeMode="cover"
           accessibilityLabel={name ?? 'Receipt image'}
         />
-        <View style={styles.previewActions}>
+        <View style={styles.previewFooter}>
+          <Feather name="paperclip" size={14} color={Colors.textSecondary} />
           <Text style={styles.previewName} numberOfLines={1}>{name ?? 'Receipt'}</Text>
-          <View style={styles.previewBtns}>
-            <TouchableOpacity
-              onPress={handleAttach}
-              style={styles.previewBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Replace receipt"
-            >
-              <Feather name="refresh-cw" size={16} color={Colors.primary} />
-              <Text style={styles.previewBtnText}>Replace</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={handleRemove}
-              style={[styles.previewBtn, styles.removeBtn]}
-              accessibilityRole="button"
-              accessibilityLabel="Remove receipt"
-            >
-              <Feather name="trash-2" size={16} color={Colors.error} />
-              <Text style={[styles.previewBtnText, { color: Colors.error }]}>Remove</Text>
-            </TouchableOpacity>
-          </View>
+        </View>
+        <View style={styles.previewActions}>
+          <TouchableOpacity
+            onPress={pickFromCamera}
+            style={[styles.actionBtn, Platform.OS === 'web' && styles.actionBtnDisabled]}
+            accessibilityRole="button"
+            accessibilityLabel="Retake photo"
+          >
+            <Feather name="camera" size={15} color={Platform.OS === 'web' ? Colors.textMuted : Colors.primary} />
+            <Text style={[styles.actionBtnText, Platform.OS === 'web' && { color: Colors.textMuted }]}>Retake</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={pickFromGallery}
+            style={styles.actionBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Choose different photo from gallery"
+          >
+            <Feather name="image" size={15} color={Colors.primary} />
+            <Text style={styles.actionBtnText}>Gallery</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={handleRemove}
+            style={[styles.actionBtn, styles.removeBtn]}
+            accessibilityRole="button"
+            accessibilityLabel="Remove receipt"
+          >
+            <Feather name="trash-2" size={15} color={Colors.error} />
+            <Text style={[styles.actionBtnText, { color: Colors.error }]}>Remove</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
   }
 
   return (
-    <TouchableOpacity
-      style={styles.addBtn}
-      onPress={handleAttach}
-      testID={testID}
-      accessibilityRole="button"
-      accessibilityLabel="Add receipt attachment"
-    >
-      <View style={styles.iconBg}>
-        <Feather name="paperclip" size={20} color={Colors.white} />
+    <View style={styles.emptyContainer} testID={testID}>
+      <Text style={styles.emptyLabel}>Attach Receipt or Photo</Text>
+      <View style={styles.btnRow}>
+        <TouchableOpacity
+          style={[styles.pickBtn, Platform.OS === 'web' && styles.pickBtnDisabled]}
+          onPress={pickFromCamera}
+          accessibilityRole="button"
+          accessibilityLabel="Take photo with camera"
+          testID="attachment-camera-button"
+        >
+          <View style={[styles.pickIcon, Platform.OS === 'web' && styles.pickIconDisabled]}>
+            <Feather name="camera" size={22} color={Colors.white} />
+          </View>
+          <Text style={[styles.pickLabel, Platform.OS === 'web' && styles.pickLabelMuted]}>Camera</Text>
+          {Platform.OS === 'web' && (
+            <Text style={styles.pickHint}>Native only</Text>
+          )}
+        </TouchableOpacity>
+
+        <View style={styles.divider} />
+
+        <TouchableOpacity
+          style={styles.pickBtn}
+          onPress={pickFromGallery}
+          accessibilityRole="button"
+          accessibilityLabel="Pick image from gallery"
+          testID="attachment-gallery-button"
+        >
+          <View style={styles.pickIcon}>
+            <Feather name="image" size={22} color={Colors.white} />
+          </View>
+          <Text style={styles.pickLabel}>Gallery / File</Text>
+          <Text style={styles.pickHint}>Photos & images</Text>
+        </TouchableOpacity>
       </View>
-      <Text style={styles.addBtnText}>Add Receipt</Text>
-    </TouchableOpacity>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  addBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  iconBg: {
-    width: 44,
-    height: 44,
+  emptyContainer: {
     borderRadius: Radius.md,
-    backgroundColor: Colors.accent,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    borderStyle: 'dashed',
+    padding: Spacing.md,
+    backgroundColor: Colors.surface,
+  },
+  emptyLabel: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontMedium,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.sm,
+    textAlign: 'center',
+  },
+  btnRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  divider: {
+    width: 1,
+    backgroundColor: Colors.border,
+    marginVertical: 4,
+  },
+  pickBtn: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: Spacing.sm,
+  },
+  pickBtnDisabled: {
+    opacity: 0.5,
+  },
+  pickIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  addBtnText: {
-    fontSize: Typography.sizeMd,
+  pickIconDisabled: {
+    backgroundColor: Colors.textMuted,
+  },
+  pickLabel: {
+    fontSize: Typography.sizeSm,
     fontFamily: Typography.fontMedium,
-    color: Colors.primary,
+    color: Colors.textPrimary,
+  },
+  pickLabelMuted: {
+    color: Colors.textMuted,
+  },
+  pickHint: {
+    fontSize: 11,
+    fontFamily: Typography.fontRegular,
+    color: Colors.textMuted,
+    textAlign: 'center',
   },
   previewContainer: {
     borderRadius: Radius.md,
@@ -155,33 +221,49 @@ const styles = StyleSheet.create({
   },
   previewImage: {
     width: '100%',
-    height: 160,
+    height: 180,
     backgroundColor: Colors.surface,
   },
-  previewActions: {
-    padding: 12,
-    backgroundColor: Colors.white,
-  },
-  previewName: {
-    fontSize: Typography.sizeSm,
-    fontFamily: Typography.fontMedium,
-    color: Colors.textPrimary,
-    marginBottom: 8,
-  },
-  previewBtns: { flexDirection: 'row', gap: 12 },
-  previewBtn: {
+  previewFooter: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingVertical: 6,
+    gap: 6,
     paddingHorizontal: 12,
-    borderRadius: Radius.sm,
+    paddingVertical: 8,
     backgroundColor: Colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
   },
-  removeBtn: { backgroundColor: Colors.errorLight },
-  previewBtnText: {
+  previewName: {
+    flex: 1,
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontMedium,
+    color: Colors.textSecondary,
+  },
+  previewActions: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    backgroundColor: Colors.white,
+  },
+  actionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 10,
+  },
+  actionBtnDisabled: {
+    opacity: 0.4,
+  },
+  actionBtnText: {
     fontSize: Typography.sizeSm,
     fontFamily: Typography.fontMedium,
     color: Colors.primary,
+  },
+  removeBtn: {
+    borderLeftWidth: 1,
+    borderLeftColor: Colors.border,
   },
 });
