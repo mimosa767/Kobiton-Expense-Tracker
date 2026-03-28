@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
-  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -23,6 +22,7 @@ import { useAuth } from '@/src/context/AuthContext';
 import { biometricService } from '@/src/services/biometricService';
 import { AppButton } from '@/src/components/AppButton';
 import { AppInput } from '@/src/components/AppInput';
+import { KobitonLogo } from '@/src/components/KobitonLogo';
 import { Colors, Radius, Shadow, Spacing, Typography } from '@/src/constants/theme';
 
 const loginSchema = z.object({
@@ -104,12 +104,7 @@ export default function LoginScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Image
-            source={require('../assets/images/icon.png')}
-            style={styles.logo}
-            resizeMode="contain"
-          />
-          <Text style={styles.brandName}>KOBITON</Text>
+          <KobitonLogo width={200} color="white" />
           <Text style={styles.title}>EXPENSE TRACKER</Text>
         </View>
 
@@ -240,14 +235,7 @@ const styles = StyleSheet.create({
     paddingVertical: Platform.OS === 'web' ? 100 : 60,
     gap: Spacing.lg,
   },
-  header: { alignItems: 'center', gap: 8 },
-  logo: { width: 72, height: 72, borderRadius: 14 },
-  brandName: {
-    fontSize: 28,
-    fontFamily: 'Inter_700Bold',
-    color: Colors.white,
-    letterSpacing: 4,
-  },
+  header: { alignItems: 'center', gap: 12 },
   title: {
     fontSize: Typography.sizeMd,
     fontFamily: 'Inter_400Regular',

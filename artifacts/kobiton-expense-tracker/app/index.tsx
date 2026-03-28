@@ -1,7 +1,8 @@
 import React, { useEffect } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
+import { KobitonLogo } from '@/src/components/KobitonLogo';
 import { Colors, Typography } from '@/src/constants/theme';
 
 export default function SplashScreen() {
@@ -23,12 +24,7 @@ export default function SplashScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.logoContainer}>
-        <Image
-          source={require('../assets/images/icon.png')}
-          style={styles.logo}
-          resizeMode="contain"
-        />
-        <Text style={styles.appName}>KOBITON</Text>
+        <KobitonLogo width={220} color="white" />
         <Text style={styles.subtitle}>Expense Tracker</Text>
       </View>
       <Text style={styles.tagline}>Quality-driven expense management</Text>
@@ -46,18 +42,7 @@ const styles = StyleSheet.create({
   },
   logoContainer: {
     alignItems: 'center',
-    gap: 12,
-  },
-  logo: {
-    width: 96,
-    height: 96,
-    borderRadius: 20,
-  },
-  appName: {
-    fontSize: 36,
-    fontFamily: 'Inter_700Bold',
-    color: Colors.white,
-    letterSpacing: 4,
+    gap: 16,
   },
   subtitle: {
     fontSize: Typography.sizeLg,

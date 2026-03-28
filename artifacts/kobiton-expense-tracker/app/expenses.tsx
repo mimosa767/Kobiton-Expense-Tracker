@@ -127,7 +127,7 @@ export default function ExpensesScreen() {
             <EmptyState
               icon="inbox"
               title="No expenses found."
-              subtitle="Tap + to create"
+              subtitle="Tap + to create."
             />
           }
           contentContainerStyle={[

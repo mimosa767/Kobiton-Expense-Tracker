@@ -80,10 +80,14 @@ export default function DebugScreen() {
   }
 
   async function handleSimulateReceipt() {
-    const sampleReceiptAsset = require('../assets/images/sample-receipt.jpg');
-    const resolvedUri = typeof sampleReceiptAsset === 'number'
-      ? `asset://${sampleReceiptAsset}`
-      : (sampleReceiptAsset as { uri: string }).uri ?? String(sampleReceiptAsset);
+    const { Image } = require('react-native');
+    const sampleReceiptModule = require('../assets/images/sample-receipt.jpg');
+    const resolvedUri: string =
+      typeof sampleReceiptModule === 'number'
+        ? (Image.resolveAssetSource(sampleReceiptModule) as { uri: string }).uri
+        : typeof sampleReceiptModule === 'string'
+        ? sampleReceiptModule
+        : (sampleReceiptModule as { uri: string }).uri;
 
     await addExpense({
       head: 'Travel',
