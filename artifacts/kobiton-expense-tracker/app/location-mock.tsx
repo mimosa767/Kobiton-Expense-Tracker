@@ -80,7 +80,7 @@ export default function LocationMockScreen() {
     if (Platform.OS === 'web') {
       setStatus('denied');
       stopPulse();
-      setErrorMsg('GPS is not available in the web preview. On a real device tested via Kobiton or Perforce, this screen will display the injected coordinates.');
+      setErrorMsg('GPS is not available in the web preview. On a real device tested via Kobiton, this screen will display the injected coordinates.');
       return;
     }
 
@@ -263,7 +263,7 @@ export default function LocationMockScreen() {
               <Text style={styles.stepNum}>1</Text>
             </View>
             <View style={styles.stepContent}>
-              <Text style={styles.stepTitle}>Kobiton / Perforce sets the GPS</Text>
+              <Text style={styles.stepTitle}>Kobiton sets the GPS</Text>
               <Text style={styles.stepDesc}>
                 From the Kobiton platform, a tester selects any coordinates and pushes them to the device under test. The platform injects the mock GPS at the OS level — the device believes it is physically at that location.
               </Text>
@@ -303,10 +303,9 @@ export default function LocationMockScreen() {
         <View style={styles.infoBox}>
           <MaterialCommunityIcons name="information-outline" size={16} color={Colors.accent} />
           <Text style={styles.infoText}>
-            GPS injection is a feature of mobile device testing platforms such as{' '}
-            <Text style={styles.infoHighlight}>Kobiton</Text> and{' '}
-            <Text style={styles.infoHighlight}>Perforce</Text>.
-            It lets QA teams verify location-sensitive features without physically travelling to each location.
+            GPS injection is a feature of the{' '}
+            <Text style={styles.infoHighlight}>Kobiton</Text>{' '}
+            mobile device testing platform. It lets QA teams verify location-sensitive features without physically travelling to each location.
           </Text>
         </View>
       </ScrollView>
