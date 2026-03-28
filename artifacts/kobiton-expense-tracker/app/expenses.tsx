@@ -60,6 +60,18 @@ export default function ExpensesScreen() {
     setShowMenu((v) => !v);
   }
 
+  function handleCrashApp() {
+    setShowMenu(false);
+    setTimeout(() => {
+      throw new Error('[Kobiton] Intentional crash triggered from menu');
+    }, 100);
+  }
+
+  function handleLocationMock() {
+    setShowMenu(false);
+    router.push('/location-mock');
+  }
+
   async function handleLogout() {
     setShowMenu(false);
     await logout();
@@ -89,6 +101,32 @@ export default function ExpensesScreen() {
       testID="menu-overlay"
     >
       <Pressable style={styles.dropdownMenu} onPress={() => {}}>
+        <TouchableOpacity
+          style={styles.menuItem}
+          onPress={handleLocationMock}
+          testID="location-mock-button"
+          accessibilityRole="button"
+          accessibilityLabel="Location Mock"
+        >
+          <Feather name="map-pin" size={16} color={Colors.accent} />
+          <Text style={styles.menuItemText}>Location Mock</Text>
+        </TouchableOpacity>
+
+        <View style={styles.menuDivider} />
+
+        <TouchableOpacity
+          style={styles.menuItem}
+          onPress={handleCrashApp}
+          testID="crash-app-button"
+          accessibilityRole="button"
+          accessibilityLabel="Crash App"
+        >
+          <Feather name="zap" size={16} color={Colors.warning} />
+          <Text style={[styles.menuItemText, { color: Colors.warning }]}>Crash App</Text>
+        </TouchableOpacity>
+
+        <View style={styles.menuDivider} />
+
         <TouchableOpacity
           style={styles.menuItem}
           onPress={handleLogout}

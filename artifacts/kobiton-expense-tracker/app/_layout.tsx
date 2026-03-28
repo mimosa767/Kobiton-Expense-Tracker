@@ -16,6 +16,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AuthProvider } from "@/src/context/AuthContext";
 import { ExpenseProvider } from "@/src/context/ExpenseContext";
+import { LocationProvider } from "@/src/context/LocationContext";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -30,6 +31,7 @@ function RootLayoutNav() {
       <Stack.Screen name="add-expense" />
       <Stack.Screen name="expense/[id]" />
       <Stack.Screen name="debug" />
+      <Stack.Screen name="location-mock" />
     </Stack>
   );
 }
@@ -57,9 +59,11 @@ export default function RootLayout() {
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
               <AuthProvider>
-                <ExpenseProvider>
-                  <RootLayoutNav />
-                </ExpenseProvider>
+                <LocationProvider>
+                  <ExpenseProvider>
+                    <RootLayoutNav />
+                  </ExpenseProvider>
+                </LocationProvider>
               </AuthProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
