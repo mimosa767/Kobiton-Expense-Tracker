@@ -91,6 +91,37 @@ Generated Zod schemas from the OpenAPI spec (e.g. `HealthCheckResponse`). Used b
 
 Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHealthCheck`, `healthCheck`).
 
+### `artifacts/kobiton-expense-tracker` (`@workspace/kobiton-expense-tracker`)
+
+Cross-platform mobile expense tracking app (Expo / React Native + TypeScript). Targets iOS, Android, and Web (via Expo for Web).
+
+**Kobiton branding**: deep blue primary `#0F2D8A`, teal accent `#00BCD4`, surface `#F4F6FB`.
+
+**Features**:
+- Stack navigation: Splash → Login → Expenses → Add/Edit Expense → Expense Detail → Debug
+- Demo credentials: `test@kobiton.com` / `kobiton123` (client-side auth, no backend)
+- Biometric login via `expo-local-authentication` (native only, platform-guarded)
+- Full CRUD for expenses with AsyncStorage persistence
+- Receipt image picker via `expo-image-picker`
+- Amount slider (HTML range on web, native slider on iOS/Android)
+- Date picker (HTML date input on web, DateTimePicker on native)
+- Debug screen: seed sample data, clear all data, simulate receipt
+- testIDs on all key controls for automated testing
+
+**Key packages**:
+- `expo-local-authentication@~15.0.0`, `expo-image-picker`, `expo-haptics`
+- `react-hook-form` + `@hookform/resolvers` + `zod`
+- `@react-native-community/slider` (native only — web uses HTML input[type=range])
+- `@react-native-community/datetimepicker` (native only — web uses HTML input[type=date])
+- `react-native-keyboard-controller`
+
+**Web compatibility notes**:
+- Slider and DateTimePicker are rendered conditionally using `Platform.OS === 'web'`
+- `require()` is used for native-only modules inside component wrappers to avoid undefined imports on web
+- `expo-local-authentication` is platform-guarded (returns false on web)
+
+`pnpm --filter @workspace/kobiton-expense-tracker run dev` — starts Expo dev server with web preview
+
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.

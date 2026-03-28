@@ -1,0 +1,27 @@
+kind = "mobile"
+previewPath = "/"
+title = "Kobiton Expense Tracker"
+version = "1.0.0"
+id = "artifacts/kobiton-expense-tracker"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+ensurePreviewReachable = "/status"
+name = "expo"
+paths = [ "/" ]
+localPort = 22284
+
+[services.development]
+run = "pnpm --filter @workspace/kobiton-expense-tracker run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/kobiton-expense-tracker", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/kobiton-expense-tracker", "run", "serve" ]
+
+[services.env]
+PORT = "22284"
+BASE_PATH = "/"
