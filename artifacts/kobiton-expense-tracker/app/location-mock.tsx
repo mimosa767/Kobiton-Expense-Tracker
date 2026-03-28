@@ -1,271 +1,316 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
-  KeyboardAvoidingView,
+  ActivityIndicator,
+  Animated,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocation, type GeoPoint } from '@/src/context/LocationContext';
+import * as Location from 'expo-location';
 import { Colors, Radius, Shadow, Spacing, Typography } from '@/src/constants/theme';
 
-const PRESET_CITIES: Array<GeoPoint & { label: string; flag: string }> = [
-  { label: 'New York',    flag: '🇺🇸', latitude: 40.7128,   longitude: -74.006,   city: 'New York',    country: 'United States' },
-  { label: 'London',     flag: '🇬🇧', latitude: 51.5074,   longitude: -0.1278,   city: 'London',      country: 'United Kingdom' },
-  { label: 'Tokyo',      flag: '🇯🇵', latitude: 35.6762,   longitude: 139.6503,  city: 'Tokyo',       country: 'Japan' },
-  { label: 'Sydney',     flag: '🇦🇺', latitude: -33.8688,  longitude: 151.2093,  city: 'Sydney',      country: 'Australia' },
-  { label: 'Singapore',  flag: '🇸🇬', latitude: 1.3521,    longitude: 103.8198,  city: 'Singapore',   country: 'Singapore' },
-  { label: 'Mumbai',     flag: '🇮🇳', latitude: 19.076,    longitude: 72.8777,   city: 'Mumbai',      country: 'India' },
-  { label: 'Berlin',     flag: '🇩🇪', latitude: 52.52,     longitude: 13.405,    city: 'Berlin',      country: 'Germany' },
-  { label: 'São Paulo',  flag: '🇧🇷', latitude: -23.5505,  longitude: -46.6333,  city: 'São Paulo',   country: 'Brazil' },
-  { label: 'Dubai',      flag: '🇦🇪', latitude: 25.2048,   longitude: 55.2708,   city: 'Dubai',       country: 'UAE' },
-  { label: 'Seoul',      flag: '🇰🇷', latitude: 37.5665,   longitude: 126.978,   city: 'Seoul',       country: 'South Korea' },
-  { label: 'Paris',      flag: '🇫🇷', latitude: 48.8566,   longitude: 2.3522,    city: 'Paris',       country: 'France' },
-  { label: 'San Francisco', flag: '🇺🇸', latitude: 37.7749, longitude: -122.4194, city: 'San Francisco', country: 'United States' },
-];
+interface ReceivedLocation {
+  latitude: number;
+  longitude: number;
+  accuracy: number | null;
+  altitude: number | null;
+  city?: string;
+  country?: string;
+  receivedAt: string;
+}
 
-function formatCoord(n: number, pos: string, neg: string) {
-  return `${Math.abs(n).toFixed(4)}° ${n >= 0 ? pos : neg}`;
+type Status = 'idle' | 'requesting' | 'acquiring' | 'received' | 'denied' | 'error';
+
+function fmtCoord(n: number, pos: string, neg: string) {
+  return `${Math.abs(n).toFixed(6)}° ${n >= 0 ? pos : neg}`;
+}
+
+function fmtTime(iso: string) {
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+async function reverseGeocode(lat: number, lng: number): Promise<{ city?: string; country?: string }> {
+  if (Platform.OS === 'web') return {};
+  try {
+    const results = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+    if (results?.length) {
+      const r = results[0];
+      return { city: r.city ?? r.subregion ?? r.region ?? undefined, country: r.country ?? undefined };
+    }
+  } catch {}
+  return {};
 }
 
 export default function LocationMockScreen() {
   const insets = useSafeAreaInsets();
-  const {
-    currentLocation,
-    realLocation,
-    mockLocation,
-    isMocked,
-    permissionStatus,
-    setMockLocation,
-    clearMock,
-    refreshReal,
-  } = useLocation();
+  const [status, setStatus] = useState<Status>('idle');
+  const [location, setLocation] = useState<ReceivedLocation | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [refreshCount, setRefreshCount] = useState(0);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  const [customLat, setCustomLat] = useState('');
-  const [customLng, setCustomLng] = useState('');
-  const [activePreset, setActivePreset] = useState<string | null>(
-    mockLocation?.city ?? null
-  );
+  const nativeDriver = Platform.OS !== 'web';
 
-  function handlePreset(city: typeof PRESET_CITIES[0]) {
-    setActivePreset(city.label);
-    setMockLocation({
-      latitude: city.latitude,
-      longitude: city.longitude,
-      city: city.city,
-      country: city.country,
-    });
-  }
+  const startPulse = useCallback(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.3, duration: 700, useNativeDriver: nativeDriver }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 700, useNativeDriver: nativeDriver }),
+      ])
+    ).start();
+  }, [pulseAnim, nativeDriver]);
 
-  function handleCustomApply() {
-    const lat = parseFloat(customLat);
-    const lng = parseFloat(customLng);
-    if (isNaN(lat) || lat < -90 || lat > 90) {
-      Alert.alert('Invalid latitude', 'Enter a number between -90 and 90.');
+  const stopPulse = useCallback(() => {
+    pulseAnim.stopAnimation();
+    Animated.timing(pulseAnim, { toValue: 1, duration: 200, useNativeDriver: nativeDriver }).start();
+  }, [pulseAnim, nativeDriver]);
+
+  const readLocation = useCallback(async () => {
+    setStatus('requesting');
+    setErrorMsg(null);
+    startPulse();
+
+    if (Platform.OS === 'web') {
+      setStatus('denied');
+      stopPulse();
+      setErrorMsg('GPS is not available in the web preview. On a real device tested via Kobiton or Perforce, this screen will display the injected coordinates.');
       return;
     }
-    if (isNaN(lng) || lng < -180 || lng > 180) {
-      Alert.alert('Invalid longitude', 'Enter a number between -180 and 180.');
-      return;
+
+    try {
+      const { status: perm } = await Location.requestForegroundPermissionsAsync();
+      if (perm !== 'granted') {
+        setStatus('denied');
+        stopPulse();
+        setErrorMsg('Location permission was denied. Grant permission to see the GPS coordinates being received by this device.');
+        return;
+      }
+
+      setStatus('acquiring');
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const { city, country } = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+
+      setLocation({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy: pos.coords.accuracy ?? null,
+        altitude: pos.coords.altitude ?? null,
+        city,
+        country,
+        receivedAt: new Date().toISOString(),
+      });
+      setStatus('received');
+    } catch (e) {
+      setStatus('error');
+      setErrorMsg(String(e));
+    } finally {
+      stopPulse();
     }
-    setActivePreset(null);
-    setMockLocation({ latitude: lat, longitude: lng, city: 'Custom', country: '' });
-  }
+  }, [startPulse, stopPulse]);
 
-  function handleClear() {
-    setActivePreset(null);
-    setCustomLat('');
-    setCustomLng('');
-    clearMock();
-  }
+  useEffect(() => {
+    readLocation();
+  }, [refreshCount]);
 
-  const displayLoc = currentLocation;
+  const isLoading = status === 'requesting' || status === 'acquiring';
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <View style={[styles.root, { paddingTop: insets.top }]}>
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            testID="location-back"
-          >
-            <Feather name="arrow-left" size={22} color={Colors.white} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>GPS Location Mock</Text>
-          <View style={{ width: 22 }} />
-        </View>
-
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
+    <View style={[styles.root, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          testID="location-back"
         >
-          {/* Current location card */}
-          <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <View style={styles.cardHeaderLeft}>
-                <Feather name="map-pin" size={15} color={isMocked ? Colors.warning : Colors.accent} />
-                <Text style={styles.cardTitle}>
-                  {isMocked ? 'Mocked Location' : 'Current Location'}
+          <Feather name="arrow-left" size={22} color={Colors.white} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Location Injection</Text>
+        <TouchableOpacity
+          onPress={() => setRefreshCount((c) => c + 1)}
+          disabled={isLoading}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          testID="refresh-location"
+        >
+          <Feather name="refresh-cw" size={20} color={isLoading ? 'rgba(255,255,255,0.4)' : Colors.white} />
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Status indicator card */}
+        <View style={styles.card}>
+          <View style={styles.statusRow}>
+            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+              <MaterialCommunityIcons
+                name={
+                  status === 'received' ? 'crosshairs-gps' :
+                  status === 'denied' || status === 'error' ? 'crosshairs-off' :
+                  'crosshairs-gps'
+                }
+                size={32}
+                color={
+                  status === 'received' ? Colors.accent :
+                  status === 'denied' || status === 'error' ? Colors.error :
+                  Colors.textMuted
+                }
+              />
+            </Animated.View>
+            <View style={styles.statusTextCol}>
+              <Text style={styles.statusLabel}>
+                {status === 'idle' ? 'Ready' :
+                 status === 'requesting' ? 'Requesting permission…' :
+                 status === 'acquiring' ? 'Acquiring GPS signal…' :
+                 status === 'received' ? 'Location received' :
+                 status === 'denied' ? 'Permission denied' :
+                 'Error reading GPS'}
+              </Text>
+              {status === 'received' && location && (
+                <Text style={styles.statusSub}>
+                  Updated {fmtTime(location.receivedAt)}
                 </Text>
-              </View>
-              {isMocked && (
-                <View style={styles.mockedBadge}>
-                  <Text style={styles.mockedBadgeText}>MOCKED</Text>
-                </View>
               )}
-              {!isMocked && permissionStatus === 'granted' && (
-                <TouchableOpacity onPress={refreshReal} testID="refresh-location">
-                  <Feather name="refresh-cw" size={14} color={Colors.textSecondary} />
-                </TouchableOpacity>
+              {isLoading && (
+                <View style={styles.loadingRow}>
+                  <ActivityIndicator size="small" color={Colors.accent} />
+                  <Text style={styles.statusSub}>
+                    {status === 'requesting' ? 'Waiting for permission…' : 'Reading device GPS…'}
+                  </Text>
+                </View>
               )}
             </View>
+          </View>
+        </View>
 
-            {displayLoc ? (
-              <View style={styles.coordBlock}>
-                <View style={styles.coordRow}>
-                  <View style={styles.coordItem}>
-                    <Text style={styles.coordLabel}>LATITUDE</Text>
-                    <Text style={styles.coordValue}>
-                      {formatCoord(displayLoc.latitude, 'N', 'S')}
-                    </Text>
-                  </View>
-                  <View style={styles.coordDivider} />
-                  <View style={styles.coordItem}>
-                    <Text style={styles.coordLabel}>LONGITUDE</Text>
-                    <Text style={styles.coordValue}>
-                      {formatCoord(displayLoc.longitude, 'E', 'W')}
-                    </Text>
-                  </View>
+        {/* Coordinates display */}
+        {status === 'received' && location ? (
+          <>
+            <Text style={styles.sectionTitle}>RECEIVED COORDINATES</Text>
+            <View style={styles.card}>
+              <View style={styles.coordGrid}>
+                <View style={styles.coordCell}>
+                  <Text style={styles.coordLabel}>LATITUDE</Text>
+                  <Text style={styles.coordValue}>{fmtCoord(location.latitude, 'N', 'S')}</Text>
+                  <Text style={styles.coordRaw}>{location.latitude.toFixed(6)}</Text>
                 </View>
-                {(displayLoc.city || displayLoc.country) && (
-                  <View style={styles.cityRow}>
-                    <Feather name="globe" size={13} color={Colors.textSecondary} />
-                    <Text style={styles.cityText}>
-                      {[displayLoc.city, displayLoc.country].filter(Boolean).join(', ')}
-                    </Text>
+                <View style={styles.coordDivider} />
+                <View style={styles.coordCell}>
+                  <Text style={styles.coordLabel}>LONGITUDE</Text>
+                  <Text style={styles.coordValue}>{fmtCoord(location.longitude, 'E', 'W')}</Text>
+                  <Text style={styles.coordRaw}>{location.longitude.toFixed(6)}</Text>
+                </View>
+              </View>
+
+              {(location.city || location.country) && (
+                <View style={styles.locationNameRow}>
+                  <Feather name="globe" size={14} color={Colors.accent} />
+                  <Text style={styles.locationName}>
+                    {[location.city, location.country].filter(Boolean).join(', ')}
+                  </Text>
+                </View>
+              )}
+
+              <View style={styles.metaRow}>
+                {location.accuracy !== null && (
+                  <View style={styles.metaItem}>
+                    <Feather name="target" size={12} color={Colors.textMuted} />
+                    <Text style={styles.metaText}>±{Math.round(location.accuracy)}m accuracy</Text>
+                  </View>
+                )}
+                {location.altitude !== null && (
+                  <View style={styles.metaItem}>
+                    <Feather name="trending-up" size={12} color={Colors.textMuted} />
+                    <Text style={styles.metaText}>{Math.round(location.altitude)}m altitude</Text>
                   </View>
                 )}
               </View>
-            ) : (
-              <View style={styles.noLocBox}>
-                <Feather name="alert-circle" size={18} color={Colors.textMuted} />
-                <Text style={styles.noLocText}>
-                  {permissionStatus === 'denied'
-                    ? Platform.OS === 'web'
-                      ? 'GPS not available in web preview. Use a preset city or enter custom coordinates.'
-                      : 'Location permission denied. Set a mock location below.'
-                    : 'Acquiring location…'}
-                </Text>
-              </View>
-            )}
-
-            {isMocked && realLocation && (
-              <View style={styles.realLocRow}>
-                <Feather name="navigation" size={12} color={Colors.textMuted} />
-                <Text style={styles.realLocText}>
-                  Real: {formatCoord(realLocation.latitude, 'N', 'S')}
-                  {' '}/ {formatCoord(realLocation.longitude, 'E', 'W')}
-                  {realLocation.city ? ` (${realLocation.city})` : ''}
-                </Text>
-              </View>
-            )}
-
-            {isMocked && (
-              <TouchableOpacity style={styles.clearBtn} onPress={handleClear} testID="clear-mock">
-                <Feather name="x-circle" size={14} color={Colors.error} />
-                <Text style={styles.clearBtnText}>Clear mock — restore real location</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Preset cities */}
-          <Text style={styles.sectionTitle}>PRESET CITIES</Text>
-          <View style={styles.presetsGrid}>
-            {PRESET_CITIES.map((city) => {
-              const isActive = activePreset === city.label;
-              return (
-                <TouchableOpacity
-                  key={city.label}
-                  style={[styles.presetBtn, isActive && styles.presetBtnActive]}
-                  onPress={() => handlePreset(city)}
-                  testID={`preset-${city.label.replace(/\s/g, '-').toLowerCase()}`}
-                  activeOpacity={0.75}
-                >
-                  <Text style={styles.presetFlag}>{city.flag}</Text>
-                  <Text style={[styles.presetName, isActive && styles.presetNameActive]}>
-                    {city.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          {/* Custom coordinates */}
-          <Text style={styles.sectionTitle}>CUSTOM COORDINATES</Text>
-          <View style={styles.card}>
-            <View style={styles.inputRow}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Latitude</Text>
-                <TextInput
-                  style={styles.input}
-                  value={customLat}
-                  onChangeText={setCustomLat}
-                  placeholder="-90 to 90"
-                  placeholderTextColor={Colors.textMuted}
-                  keyboardType="numbers-and-punctuation"
-                  returnKeyType="next"
-                  testID="input-lat"
-                />
-              </View>
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Longitude</Text>
-                <TextInput
-                  style={styles.input}
-                  value={customLng}
-                  onChangeText={setCustomLng}
-                  placeholder="-180 to 180"
-                  placeholderTextColor={Colors.textMuted}
-                  keyboardType="numbers-and-punctuation"
-                  returnKeyType="done"
-                  onSubmitEditing={handleCustomApply}
-                  testID="input-lng"
-                />
-              </View>
             </View>
+
             <TouchableOpacity
-              style={styles.applyBtn}
-              onPress={handleCustomApply}
-              testID="apply-custom"
+              style={styles.refreshBtn}
+              onPress={() => setRefreshCount((c) => c + 1)}
+              testID="refresh-location-btn"
             >
-              <Feather name="check" size={16} color={Colors.white} />
-              <Text style={styles.applyBtnText}>Apply Custom Coordinates</Text>
+              <Feather name="refresh-cw" size={16} color={Colors.white} />
+              <Text style={styles.refreshBtnText}>Refresh Location</Text>
             </TouchableOpacity>
+          </>
+        ) : (errorMsg && (
+          <View style={styles.errorCard}>
+            <Feather name="alert-circle" size={18} color={Colors.error} />
+            <Text style={styles.errorText}>{errorMsg}</Text>
+          </View>
+        ))}
+
+        {/* How it works */}
+        <Text style={styles.sectionTitle}>HOW LOCATION INJECTION WORKS</Text>
+
+        <View style={styles.card}>
+          <View style={styles.stepRow}>
+            <View style={[styles.stepBadge, { backgroundColor: Colors.primary }]}>
+              <Text style={styles.stepNum}>1</Text>
+            </View>
+            <View style={styles.stepContent}>
+              <Text style={styles.stepTitle}>Kobiton / Perforce sets the GPS</Text>
+              <Text style={styles.stepDesc}>
+                From the Kobiton platform, a tester selects any coordinates and pushes them to the device under test. The platform injects the mock GPS at the OS level — the device believes it is physically at that location.
+              </Text>
+            </View>
           </View>
 
-          {/* Info note */}
-          <View style={styles.infoBox}>
-            <Feather name="info" size={14} color={Colors.accent} />
-            <Text style={styles.infoText}>
-              Mocked coordinates replace the GPS signal app-wide. Use this to test location-sensitive features as if the device is in a different city or country.
-            </Text>
+          <View style={styles.stepDivider} />
+
+          <View style={styles.stepRow}>
+            <View style={[styles.stepBadge, { backgroundColor: Colors.accent }]}>
+              <Text style={styles.stepNum}>2</Text>
+            </View>
+            <View style={styles.stepContent}>
+              <Text style={styles.stepTitle}>The app reads real device GPS</Text>
+              <Text style={styles.stepDesc}>
+                This screen calls the standard device location API — the same way any production app would. It does not do any internal mocking. It simply displays whatever GPS signal the device reports.
+              </Text>
+            </View>
           </View>
-        </ScrollView>
-      </View>
-    </KeyboardAvoidingView>
+
+          <View style={styles.stepDivider} />
+
+          <View style={styles.stepRow}>
+            <View style={[styles.stepBadge, { backgroundColor: Colors.categoryTravel }]}>
+              <Text style={styles.stepNum}>3</Text>
+            </View>
+            <View style={styles.stepContent}>
+              <Text style={styles.stepTitle}>Verify the injected coordinates appear here</Text>
+              <Text style={styles.stepDesc}>
+                After Kobiton injects coordinates, tap Refresh. The latitude and longitude shown here should match exactly what was configured in the platform — confirming that GPS injection is working correctly for your app.
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Platform info */}
+        <View style={styles.infoBox}>
+          <MaterialCommunityIcons name="information-outline" size={16} color={Colors.accent} />
+          <Text style={styles.infoText}>
+            GPS injection is a feature of mobile device testing platforms such as{' '}
+            <Text style={styles.infoHighlight}>Kobiton</Text> and{' '}
+            <Text style={styles.infoHighlight}>Perforce</Text>.
+            It lets QA teams verify location-sensitive features without physically travelling to each location.
+          </Text>
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -277,8 +322,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.md,
-    paddingBottom: 14,
-    paddingTop: 14,
+    paddingVertical: 14,
   },
   headerTitle: {
     fontSize: Typography.sizeLg,
@@ -287,6 +331,7 @@ const styles = StyleSheet.create({
   },
   scroll: { flex: 1 },
   content: { padding: Spacing.md, gap: Spacing.md },
+
   card: {
     backgroundColor: Colors.white,
     borderRadius: Radius.lg,
@@ -294,45 +339,44 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
     ...Shadow.card,
   },
-  cardHeader: {
+
+  statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: Spacing.md,
   },
-  cardHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  cardTitle: {
-    fontSize: Typography.sizeSm,
+  statusTextCol: { flex: 1, gap: 4 },
+  statusLabel: {
+    fontSize: Typography.sizeMd,
     fontFamily: Typography.fontSemiBold,
     color: Colors.textPrimary,
   },
-  mockedBadge: {
-    backgroundColor: Colors.warning,
-    borderRadius: Radius.full,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+  statusSub: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontRegular,
+    color: Colors.textMuted,
   },
-  mockedBadgeText: {
-    fontSize: 10,
-    fontFamily: Typography.fontBold,
-    color: Colors.white,
-    letterSpacing: 0.8,
+  loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+
+  sectionTitle: {
+    fontSize: 11,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.textMuted,
+    letterSpacing: 1.2,
+    marginBottom: -4,
   },
-  coordBlock: { gap: 8 },
-  coordRow: {
+
+  coordGrid: {
     flexDirection: 'row',
     backgroundColor: Colors.surface,
     borderRadius: Radius.md,
     overflow: 'hidden',
   },
-  coordItem: {
+  coordCell: {
     flex: 1,
     padding: Spacing.md,
-    gap: 4,
     alignItems: 'center',
+    gap: 4,
   },
   coordDivider: { width: 1, backgroundColor: Colors.border },
   coordLabel: {
@@ -345,130 +389,97 @@ const styles = StyleSheet.create({
     fontSize: Typography.sizeMd,
     fontFamily: Typography.fontBold,
     color: Colors.primary,
+    textAlign: 'center',
   },
-  cityRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  cityText: {
-    fontSize: Typography.sizeSm,
-    fontFamily: Typography.fontMedium,
-    color: Colors.textSecondary,
-  },
-  noLocBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-  },
-  noLocText: {
-    flex: 1,
-    fontSize: Typography.sizeSm,
-    fontFamily: Typography.fontRegular,
-    color: Colors.textSecondary,
-    lineHeight: 18,
-  },
-  realLocRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  realLocText: {
-    fontSize: 11,
+  coordRaw: {
+    fontSize: 10,
     fontFamily: Typography.fontRegular,
     color: Colors.textMuted,
-    flex: 1,
   },
-  clearBtn: {
+
+  locationNameRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    marginTop: 4,
+    paddingTop: 4,
   },
-  clearBtnText: {
-    fontSize: Typography.sizeSm,
-    fontFamily: Typography.fontMedium,
-    color: Colors.error,
-  },
-  sectionTitle: {
-    fontSize: 11,
+  locationName: {
+    fontSize: Typography.sizeMd,
     fontFamily: Typography.fontSemiBold,
-    color: Colors.textMuted,
-    letterSpacing: 1.2,
-    marginBottom: -4,
+    color: Colors.textPrimary,
   },
-  presetsGrid: {
+
+  metaRow: {
     flexDirection: 'row',
+    gap: Spacing.md,
     flexWrap: 'wrap',
-    gap: 8,
   },
-  presetBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: Colors.white,
-    borderRadius: Radius.md,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    ...Shadow.card,
-  },
-  presetBtnActive: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.primary,
-  },
-  presetFlag: { fontSize: 16 },
-  presetName: {
-    fontSize: Typography.sizeSm,
-    fontFamily: Typography.fontMedium,
-    color: Colors.textPrimary,
-  },
-  presetNameActive: {
-    color: Colors.white,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-  },
-  inputGroup: { flex: 1, gap: 4 },
-  inputLabel: {
-    fontSize: 11,
-    fontFamily: Typography.fontSemiBold,
-    color: Colors.textMuted,
-    letterSpacing: 0.5,
-  },
-  input: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
+  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  metaText: {
     fontSize: Typography.sizeSm,
     fontFamily: Typography.fontRegular,
-    color: Colors.textPrimary,
+    color: Colors.textMuted,
   },
-  applyBtn: {
+
+  refreshBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     backgroundColor: Colors.accent,
     borderRadius: Radius.md,
-    paddingVertical: 12,
+    paddingVertical: 13,
   },
-  applyBtnText: {
+  refreshBtnText: {
     fontSize: Typography.sizeSm,
     fontFamily: Typography.fontSemiBold,
     color: Colors.white,
   },
+
+  errorCard: {
+    flexDirection: 'row',
+    gap: 10,
+    backgroundColor: Colors.error + '12',
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    alignItems: 'flex-start',
+  },
+  errorText: {
+    flex: 1,
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontRegular,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+  },
+
+  stepRow: { flexDirection: 'row', gap: Spacing.md, alignItems: 'flex-start' },
+  stepBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  stepNum: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontBold,
+    color: Colors.white,
+  },
+  stepContent: { flex: 1, gap: 4 },
+  stepTitle: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.textPrimary,
+  },
+  stepDesc: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontRegular,
+    color: Colors.textSecondary,
+    lineHeight: 19,
+  },
+  stepDivider: { height: 1, backgroundColor: Colors.border, marginVertical: 4 },
+
   infoBox: {
     flexDirection: 'row',
     gap: 8,
@@ -482,6 +493,10 @@ const styles = StyleSheet.create({
     fontSize: Typography.sizeSm,
     fontFamily: Typography.fontRegular,
     color: Colors.textSecondary,
-    lineHeight: 18,
+    lineHeight: 19,
+  },
+  infoHighlight: {
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.primary,
   },
 });
