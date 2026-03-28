@@ -22,7 +22,7 @@ async function login(email: string, password: string): Promise<Session | null> {
 }
 
 async function logout(): Promise<void> {
-  await AsyncStorage.multiRemove([STORAGE_KEYS.session, STORAGE_KEYS.biometricEnabled]);
+  await AsyncStorage.removeItem(STORAGE_KEYS.session);
 }
 
 async function getSession(): Promise<Session | null> {

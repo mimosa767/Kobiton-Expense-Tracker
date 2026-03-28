@@ -90,11 +90,11 @@ export default function DebugScreen() {
         : (sampleReceiptModule as { uri: string }).uri;
 
     await addExpense({
-      head: 'Travel',
+      head: 'Taxi',
       amount: 42.50,
       currency: 'USD-$',
       date: new Date().toISOString().split('T')[0],
-      category: 'Business',
+      category: 'Travel',
       recurring: false,
       notes: 'Simulated receipt from bundled sample asset (test mode)',
       attachmentUri: resolvedUri,
