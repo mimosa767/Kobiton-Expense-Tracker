@@ -56,7 +56,7 @@ export default function KobitonSDKScreen() {
   const [networkCapture, setNetworkCapture] = useState(true);
   const [crashReporting, setCrashReporting] = useState(true);
   const [toast, setToast] = useState({ visible: false, message: '', type: 'success' as 'success' | 'error' });
-  const [activeTab, setActiveTab] = useState<'session' | 'events' | 'network'>('session');
+  const [activeTab, setActiveTab] = useState<'session' | 'events' | 'network' | 'biometrics'>('session');
 
   useEffect(() => {
     const unsub = kobitonSDK.subscribe(() => setStatus(kobitonSDK.getStatus()));
@@ -208,14 +208,17 @@ export default function KobitonSDKScreen() {
 
         {/* Tab Bar */}
         <View style={styles.tabBar}>
-          {(['session', 'events', 'network'] as const).map((tab) => (
+          {(['session', 'events', 'network', 'biometrics'] as const).map((tab) => (
             <TouchableOpacity
               key={tab}
               style={[styles.tab, activeTab === tab && styles.tabActive]}
               onPress={() => setActiveTab(tab)}
             >
               <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
-                {tab === 'session' ? 'Session' : tab === 'events' ? `Events (${status.events.length})` : `Network (${status.networkLogs.length})`}
+                {tab === 'session' ? 'Session'
+                 : tab === 'events' ? `Events (${status.events.length})`
+                 : tab === 'network' ? `Network (${status.networkLogs.length})`
+                 : 'Biometrics'}
               </Text>
             </TouchableOpacity>
           ))}
@@ -446,6 +449,128 @@ export default function KobitonSDKScreen() {
               ))
             )}
           </View>
+        )}
+
+        {/* BIOMETRICS TAB */}
+        {activeTab === 'biometrics' && (
+          <>
+            {/* How it works */}
+            <View style={styles.card}>
+              <SectionHeader title="How Kobiton Biometric Testing Works" />
+              <Text style={[styles.guideBody, { marginBottom: 8 }]}>
+                The Kobiton Biometric SDK intercepts native OS biometric calls and lets the platform inject a pass or fail signal remotely — no physical finger or face needed.
+              </Text>
+
+              {[
+                { n: '1', color: Colors.primary, title: 'App requests biometrics', desc: 'The login screen calls the standard OS biometric API (LocalAuthentication on iOS, BiometricPrompt on Android). Every call is logged to the Kobiton session timeline.' },
+                { n: '2', color: Colors.accent, title: 'Kobiton SDK intercepts', desc: 'KobitonLAContext (iOS) or KobitonBiometric.aar (Android) intercepts the call before it reaches the hardware. The Kobiton platform shows the biometric prompt in the device viewer.' },
+                { n: '3', color: Colors.categoryTravel, title: 'Platform injects result', desc: 'The tester (or automation script) clicks "Pass" or "Fail" in the Kobiton portal. The result is sent to the app exactly as if a real finger or face authenticated.' },
+                { n: '4', color: Colors.categorySoftware, title: 'App receives result', desc: 'The app receives success: true or success: false — same API response as on a physical device. Logs appear in the Events tab showing the full biometric lifecycle.' },
+              ].map(({ n, color, title, desc }) => (
+                <View key={n} style={styles.guideStep}>
+                  <View style={[styles.guideStepNum, { backgroundColor: color }]}>
+                    <Text style={styles.guideStepNumText}>{n}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.guideStepText, { fontFamily: Typography.fontSemiBold, color: Colors.textPrimary, marginBottom: 2 }]}>{title}</Text>
+                    <Text style={styles.guideStepText}>{desc}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            {/* Automation command */}
+            <View style={styles.card}>
+              <SectionHeader title="Automation Script" />
+              <Text style={styles.guideBody}>
+                Use this WebDriver command in your Kobiton test script to inject a biometric result:
+              </Text>
+              <View style={styles.codeBlock}>
+                <Text style={styles.codeText}>{`# Pass biometric authentication\ndriver.execute(\n  'mobile:biometrics-authenticate',\n  {'result': 'passed'}\n)\n\n# Fail biometric authentication\ndriver.execute(\n  'mobile:biometrics-authenticate',\n  {'result': 'failed'}\n)`}</Text>
+              </View>
+            </View>
+
+            {/* iOS Build Setup */}
+            <View style={[styles.card, styles.guideCard]}>
+              <View style={styles.guideHeader}>
+                <Feather name="smartphone" size={16} color={Colors.primary} />
+                <Text style={styles.guideTitle}>iOS Setup (KobitonLAContext)</Text>
+              </View>
+              <Text style={styles.guideBody}>
+                KobitonLAContext.framework is a drop-in replacement for Apple's LAContext. Embedding it allows Kobiton to intercept all Face ID / Touch ID calls.
+              </Text>
+              {[
+                ['1', 'Download KobitonLAContext.zip from the Kobiton portal'],
+                ['2', 'Move KobitonLAContext.framework into your Xcode project directory'],
+                ['3', 'In Xcode → Frameworks, Libraries and Embedded Content → Add → Embed & Sign'],
+                ['4', 'Enable biometricSupport: true in app.json plugin config (see below)'],
+                ['5', 'Run: eas build --platform ios --profile preview'],
+              ].map(([n, text]) => (
+                <View key={n} style={styles.guideStep}>
+                  <View style={styles.guideStepNum}>
+                    <Text style={styles.guideStepNumText}>{n}</Text>
+                  </View>
+                  <Text style={styles.guideStepText}>{text}</Text>
+                </View>
+              ))}
+              <View style={styles.codeBlock}>
+                <Text style={styles.codeText}>{`"plugins": [\n  ["./plugins/withKobitonSDK", {\n    "apiKey": "kbt_YOUR_KEY",\n    "biometricSupport": true\n  }]\n]`}</Text>
+              </View>
+            </View>
+
+            {/* Android Build Setup */}
+            <View style={[styles.card, styles.guideCard]}>
+              <View style={styles.guideHeader}>
+                <Feather name="cpu" size={16} color={Colors.accent} />
+                <Text style={[styles.guideTitle, { color: Colors.accent }]}>Android Setup (KobitonBiometric.aar)</Text>
+              </View>
+              <Text style={styles.guideBody}>
+                KobitonBiometric.aar wraps Android's BiometricPrompt to allow remote injection.
+              </Text>
+              {[
+                ['1', 'Download KobitonBiometric.aar from the Kobiton portal'],
+                ['2', 'Place it in android/app/libs/ (a README is added automatically by the plugin)'],
+                ['3', 'Add to build.gradle: implementation fileTree(dir: \'libs\', include: [\'*.aar\'])'],
+                ['4', 'Disable .CryptoObject in BiometricPrompt.AuthenticationCallback'],
+                ['5', 'Run: eas build --platform android --profile preview'],
+              ].map(([n, text]) => (
+                <View key={n} style={styles.guideStep}>
+                  <View style={[styles.guideStepNum, { backgroundColor: Colors.accent }]}>
+                    <Text style={styles.guideStepNumText}>{n}</Text>
+                  </View>
+                  <Text style={styles.guideStepText}>{text}</Text>
+                </View>
+              ))}
+            </View>
+
+            {/* Recent biometric events */}
+            <View style={styles.card}>
+              <View style={styles.logHeader}>
+                <Text style={styles.sectionTitle}>Recent Biometric Events</Text>
+              </View>
+              {status.events.filter((e) => e.label.toLowerCase().includes('biometric')).length === 0 ? (
+                <Text style={styles.emptyLog}>
+                  No biometric events yet. Tap the Biometric Login button on the login screen to generate events.
+                </Text>
+              ) : (
+                status.events
+                  .filter((e) => e.label.toLowerCase().includes('biometric'))
+                  .slice(0, 8)
+                  .map((ev) => (
+                    <View key={ev.id} style={styles.logRow}>
+                      <View style={[styles.logLevelDot, { backgroundColor: LOG_LEVEL_COLORS[ev.level] }]} />
+                      <View style={styles.logContent}>
+                        <Text style={styles.logLabel}>{ev.label}</Text>
+                        <Text style={styles.logMeta}>
+                          {ev.type.toUpperCase()} · {new Date(ev.timestamp).toLocaleTimeString()}
+                          {ev.metadata?.result ? ` · ${ev.metadata.result}` : ''}
+                        </Text>
+                      </View>
+                    </View>
+                  ))
+              )}
+            </View>
+          </>
         )}
 
       </ScrollView>

@@ -33,11 +33,10 @@ const loginSchema = z.object({
 });
 
 type LoginFormData = z.infer<typeof loginSchema>;
-
 type BiometricState = 'idle' | 'scanning' | 'success' | 'failed';
 
 export default function LoginScreen() {
-  const { login, loginWithBiometric, isBiometricEnabled, setBiometricEnabled, session } = useAuth();
+  const { login, loginWithBiometric, isBiometricEnabled, setBiometricEnabled } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [biometricState, setBiometricState] = useState<BiometricState>('idle');
@@ -61,34 +60,31 @@ export default function LoginScreen() {
   function startPulse() {
     Animated.loop(
       Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.15, duration: 600, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1.15, duration: 600, useNativeDriver: false }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: false }),
       ])
     ).start();
   }
 
   function stopPulse() {
     pulseAnim.stopAnimation();
-    Animated.timing(pulseAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    Animated.timing(pulseAnim, { toValue: 1, duration: 200, useNativeDriver: false }).start();
   }
 
   async function handleBiometricLogin() {
     setLoginError(null);
-    setBiometricState('scanning');
-    startPulse();
 
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
-    if (Platform.OS === 'web' || !biometricAvailable) {
-      await new Promise((r) => setTimeout(r, 1400));
-      stopPulse();
-      setBiometricState('success');
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await new Promise((r) => setTimeout(r, 900));
-      await loginWithBiometric();
-      router.replace('/expenses');
+    if (Platform.OS === 'web') {
+      setLoginError(
+        'Biometric authentication requires a real device. ' +
+        'When running on Kobiton, the platform injects the pass or fail signal remotely.'
+      );
       return;
     }
+
+    setBiometricState('scanning');
+    startPulse();
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     const result = await biometricService.authenticate('Sign in to Kobiton Expense Tracker');
     stopPulse();
@@ -131,11 +127,11 @@ export default function LoginScreen() {
     }
   }
 
-  const isDemo = Platform.OS === 'web' || !biometricAvailable;
   const iconColor =
     biometricState === 'success' ? Colors.categoryTravel :
     biometricState === 'failed' ? Colors.error :
     biometricState === 'scanning' ? Colors.accent :
+    Platform.OS === 'web' ? Colors.textMuted :
     Colors.primary;
 
   return (
@@ -155,13 +151,14 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.card}>
-          {/* Biometric button — always visible, prominent */}
+          {/* Biometric button */}
           <TouchableOpacity
             style={[
               styles.bioBtn,
               biometricState === 'scanning' && styles.bioBtnScanning,
               biometricState === 'success' && styles.bioBtnSuccess,
               biometricState === 'failed' && styles.bioBtnFailed,
+              Platform.OS === 'web' && styles.bioBtnWeb,
             ]}
             onPress={handleBiometricLogin}
             disabled={biometricState === 'scanning' || biometricState === 'success'}
@@ -189,7 +186,9 @@ export default function LoginScreen() {
             </Text>
             {biometricState === 'idle' && (
               <Text style={styles.bioBtnSub}>
-                Use your fingerprint or face to sign in
+                {Platform.OS === 'web'
+                  ? 'Tested via Kobiton on real devices'
+                  : 'Use your fingerprint or face to sign in'}
               </Text>
             )}
           </TouchableOpacity>
@@ -242,8 +241,14 @@ export default function LoginScreen() {
 
           {loginError && (
             <View style={styles.errorBox}>
-              <Feather name="alert-circle" size={14} color={Colors.error} />
-              <Text style={styles.errorText}>{loginError}</Text>
+              <Feather
+                name={Platform.OS === 'web' ? 'info' : 'alert-circle'}
+                size={14}
+                color={Platform.OS === 'web' ? Colors.accent : Colors.error}
+              />
+              <Text style={[styles.errorText, Platform.OS === 'web' && styles.infoText]}>
+                {loginError}
+              </Text>
             </View>
           )}
 
@@ -366,6 +371,11 @@ const styles = StyleSheet.create({
     borderColor: Colors.error,
     backgroundColor: Colors.error + '10',
   },
+  bioBtnWeb: {
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    opacity: 0.85,
+  },
   bioBtnLabel: {
     fontSize: Typography.sizeMd,
     fontFamily: Typography.fontSemiBold,
@@ -392,7 +402,7 @@ const styles = StyleSheet.create({
 
   errorBox: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 6,
     backgroundColor: Colors.error + '10',
     borderRadius: Radius.md,
@@ -404,6 +414,10 @@ const styles = StyleSheet.create({
     fontSize: Typography.sizeSm,
     fontFamily: Typography.fontRegular,
     color: Colors.error,
+    lineHeight: 18,
+  },
+  infoText: {
+    color: Colors.textSecondary,
   },
 
   biometricRow: {
