@@ -59,6 +59,9 @@
     "@hookform/resolvers": "^3.10.0",
     "@react-native-community/datetimepicker": "^9.1.0",
     "@react-native-community/slider": "^5.1.2",
+    "expo-av": "~16.0.8",
+    "expo-battery": "~10.0.8",
+    "expo-camera": "~17.0.10",
     "expo-local-authentication": "15.0.2",
     "react-hook-form": "^7.71.2"
   }

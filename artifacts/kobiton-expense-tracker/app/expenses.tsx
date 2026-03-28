@@ -72,6 +72,21 @@ export default function ExpensesScreen() {
     router.push('/location-mock');
   }
 
+  function handleMediaGallery() {
+    setShowMenu(false);
+    router.push('/media-gallery');
+  }
+
+  function handleAudioCapture() {
+    setShowMenu(false);
+    router.push('/audio-capture');
+  }
+
+  function handleSystemMetrics() {
+    setShowMenu(false);
+    router.push('/system-metrics');
+  }
+
   async function handleLogout() {
     setShowMenu(false);
     await logout();
@@ -101,39 +116,36 @@ export default function ExpensesScreen() {
       testID="menu-overlay"
     >
       <Pressable style={styles.dropdownMenu} onPress={() => {}}>
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={handleLocationMock}
-          testID="location-mock-button"
-          accessibilityRole="button"
-          accessibilityLabel="Location Mock"
-        >
+        <View style={styles.menuGroupLabel}><Text style={styles.menuGroupText}>TESTING TOOLS</Text></View>
+
+        <TouchableOpacity style={styles.menuItem} onPress={handleLocationMock} testID="location-mock-button">
           <Feather name="map-pin" size={16} color={Colors.accent} />
           <Text style={styles.menuItemText}>Location Mock</Text>
         </TouchableOpacity>
-
         <View style={styles.menuDivider} />
-
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={handleCrashApp}
-          testID="crash-app-button"
-          accessibilityRole="button"
-          accessibilityLabel="Crash App"
-        >
+        <TouchableOpacity style={styles.menuItem} onPress={handleMediaGallery} testID="media-gallery-button">
+          <Feather name="image" size={16} color={Colors.categoryOffice} />
+          <Text style={styles.menuItemText}>Media &amp; QR Scanner</Text>
+        </TouchableOpacity>
+        <View style={styles.menuDivider} />
+        <TouchableOpacity style={styles.menuItem} onPress={handleAudioCapture} testID="audio-capture-button">
+          <Feather name="mic" size={16} color={Colors.categoryMeals} />
+          <Text style={styles.menuItemText}>Audio Capture</Text>
+        </TouchableOpacity>
+        <View style={styles.menuDivider} />
+        <TouchableOpacity style={styles.menuItem} onPress={handleSystemMetrics} testID="system-metrics-button">
+          <Feather name="activity" size={16} color={Colors.categoryTravel} />
+          <Text style={styles.menuItemText}>System Metrics</Text>
+        </TouchableOpacity>
+        <View style={styles.menuDivider} />
+        <TouchableOpacity style={styles.menuItem} onPress={handleCrashApp} testID="crash-app-button">
           <Feather name="zap" size={16} color={Colors.warning} />
           <Text style={[styles.menuItemText, { color: Colors.warning }]}>Crash App</Text>
         </TouchableOpacity>
 
-        <View style={styles.menuDivider} />
+        <View style={[styles.menuDivider, { backgroundColor: Colors.border, height: 4 }]} />
 
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={handleLogout}
-          testID="logout-button"
-          accessibilityRole="button"
-          accessibilityLabel="Logout"
-        >
+        <TouchableOpacity style={styles.menuItem} onPress={handleLogout} testID="logout-button">
           <Feather name="log-out" size={16} color={Colors.error} />
           <Text style={[styles.menuItemText, { color: Colors.error }]}>Logout</Text>
         </TouchableOpacity>
@@ -235,11 +247,22 @@ const styles = StyleSheet.create({
     minWidth: 180,
     overflow: 'hidden',
   },
+  menuGroupLabel: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  menuGroupText: {
+    fontSize: 10,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.textMuted,
+    letterSpacing: 1,
+  },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    paddingVertical: 14,
+    paddingVertical: 13,
     paddingHorizontal: 16,
   },
   menuItemText: {

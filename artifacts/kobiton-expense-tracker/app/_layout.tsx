@@ -32,6 +32,9 @@ function RootLayoutNav() {
       <Stack.Screen name="expense/[id]" />
       <Stack.Screen name="debug" />
       <Stack.Screen name="location-mock" />
+      <Stack.Screen name="media-gallery" />
+      <Stack.Screen name="audio-capture" />
+      <Stack.Screen name="system-metrics" />
     </Stack>
   );
 }
