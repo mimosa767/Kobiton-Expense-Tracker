@@ -47,7 +47,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function logout(): Promise<void> {
     await authService.logout();
     setSession(null);
-    setIsBiometricEnabledState(false);
   }
 
   async function setBiometricEnabled(v: boolean): Promise<void> {
