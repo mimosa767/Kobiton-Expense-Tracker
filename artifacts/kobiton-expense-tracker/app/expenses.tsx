@@ -170,6 +170,7 @@ export default function ExpensesScreen() {
     }, 100);
   }
 
+  function handleKobitonSDK() { setShowMenu(false); router.push('/kobiton-sdk'); }
   function handleLocationMock() { setShowMenu(false); router.push('/location-mock'); }
   function handleMediaGallery() { setShowMenu(false); router.push('/media-gallery'); }
   function handleAudioCapture() { setShowMenu(false); router.push('/audio-capture'); }
@@ -257,6 +258,11 @@ export default function ExpensesScreen() {
         <View style={styles.menuGroupLabel}>
           <Text style={styles.menuGroupText}>TESTING TOOLS</Text>
         </View>
+        <TouchableOpacity style={styles.menuItem} onPress={handleKobitonSDK} testID="kobiton-sdk-button">
+          <Feather name="cpu" size={16} color={Colors.primary} />
+          <Text style={styles.menuItemText}>Kobiton SDK</Text>
+        </TouchableOpacity>
+        <View style={styles.menuDivider} />
         <TouchableOpacity style={styles.menuItem} onPress={handleLocationMock} testID="location-mock-button">
           <Feather name="map-pin" size={16} color={Colors.accent} />
           <Text style={styles.menuItemText}>Location Mock</Text>

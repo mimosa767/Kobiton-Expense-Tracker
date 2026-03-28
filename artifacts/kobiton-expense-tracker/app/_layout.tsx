@@ -17,6 +17,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AuthProvider, useAuth } from "@/src/context/AuthContext";
 import { ExpenseProvider } from "@/src/context/ExpenseContext";
 import { LocationProvider } from "@/src/context/LocationContext";
+import { kobitonSDK } from "@/src/services/kobitonSDK";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -38,6 +39,10 @@ function RootLayoutNav() {
     }
   }, [session, isLoading, segments]);
 
+  useEffect(() => {
+    kobitonSDK.logEvent('App launched', 'info', { platform: require('react-native').Platform.OS });
+  }, []);
+
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="index" />
@@ -50,6 +55,7 @@ function RootLayoutNav() {
       <Stack.Screen name="media-gallery" />
       <Stack.Screen name="audio-capture" />
       <Stack.Screen name="system-metrics" />
+      <Stack.Screen name="kobiton-sdk" />
     </Stack>
   );
 }

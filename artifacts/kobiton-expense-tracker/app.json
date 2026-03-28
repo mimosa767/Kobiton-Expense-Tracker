@@ -41,7 +41,16 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-image-picker"
+      "expo-image-picker",
+      [
+        "./plugins/withKobitonSDK",
+        {
+          "apiKey": "",
+          "baseUrl": "https://api.kobiton.com",
+          "enableNetworkCapture": true,
+          "enableCrashReporting": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
