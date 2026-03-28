@@ -56,6 +56,7 @@ function RootLayoutNav() {
       <Stack.Screen name="audio-capture" />
       <Stack.Screen name="system-metrics" />
       <Stack.Screen name="kobiton-sdk" />
+      <Stack.Screen name="guide" />
     </Stack>
   );
 }

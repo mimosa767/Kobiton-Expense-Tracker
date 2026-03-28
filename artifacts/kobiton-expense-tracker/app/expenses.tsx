@@ -170,6 +170,7 @@ export default function ExpensesScreen() {
     }, 100);
   }
 
+  function handleGuide() { setShowMenu(false); router.push('/guide'); }
   function handleKobitonSDK() { setShowMenu(false); router.push('/kobiton-sdk'); }
   function handleLocationMock() { setShowMenu(false); router.push('/location-mock'); }
   function handleMediaGallery() { setShowMenu(false); router.push('/media-gallery'); }
@@ -255,6 +256,11 @@ export default function ExpensesScreen() {
   const menuActions = showMenu ? (
     <Pressable style={styles.overlay} onPress={() => setShowMenu(false)} testID="menu-overlay">
       <Pressable style={styles.dropdownMenu} onPress={() => {}}>
+        <TouchableOpacity style={styles.menuItem} onPress={handleGuide} testID="guide-button">
+          <Feather name="book-open" size={16} color={Colors.categoryTravel} />
+          <Text style={styles.menuItemText}>Feature Guide</Text>
+        </TouchableOpacity>
+        <View style={[styles.menuDivider, { height: 4 }]} />
         <View style={styles.menuGroupLabel}>
           <Text style={styles.menuGroupText}>TESTING TOOLS</Text>
         </View>
