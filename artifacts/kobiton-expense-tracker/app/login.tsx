@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Alert,
+  Animated,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -15,6 +15,7 @@ import {
 import { Controller, useForm } from 'react-hook-form';
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -33,11 +34,16 @@ const loginSchema = z.object({
 
 type LoginFormData = z.infer<typeof loginSchema>;
 
+type BiometricState = 'idle' | 'scanning' | 'success' | 'failed';
+
 export default function LoginScreen() {
   const { login, loginWithBiometric, isBiometricEnabled, setBiometricEnabled, session } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [biometricState, setBiometricState] = useState<BiometricState>('idle');
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [showSignupModal, setShowSignupModal] = useState(false);
+  const pulseAnim = useState(() => new Animated.Value(1))[0];
 
   const { control, handleSubmit, formState: { errors } } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
@@ -49,28 +55,62 @@ export default function LoginScreen() {
   });
 
   useEffect(() => {
-    if (session) {
-      router.replace('/expenses');
-    }
-  }, [session]);
-
-  useEffect(() => {
     biometricService.hasHardware().then(setBiometricAvailable);
   }, []);
 
+  function startPulse() {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.15, duration: 600, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+      ])
+    ).start();
+  }
+
+  function stopPulse() {
+    pulseAnim.stopAnimation();
+    Animated.timing(pulseAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+  }
+
   async function handleBiometricLogin() {
-    const result = await biometricService.authenticate('Sign in to Kobiton Expense Tracker');
-    if (result.success) {
-      await loginWithBiometric();
+    setLoginError(null);
+    setBiometricState('scanning');
+    startPulse();
+
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    if (Platform.OS === 'web' || !biometricAvailable) {
+      await new Promise((r) => setTimeout(r, 1400));
+      stopPulse();
+      setBiometricState('success');
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await new Promise((r) => setTimeout(r, 900));
+      await loginWithBiometric();
       router.replace('/expenses');
-    } else if (result.reason !== 'cancelled') {
-      Alert.alert('Biometric Failed', result.message ?? 'Please use your credentials instead.');
+      return;
+    }
+
+    const result = await biometricService.authenticate('Sign in to Kobiton Expense Tracker');
+    stopPulse();
+
+    if (result.success) {
+      setBiometricState('success');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await new Promise((r) => setTimeout(r, 900));
+      await loginWithBiometric();
+      router.replace('/expenses');
+    } else if (result.reason === 'cancelled') {
+      setBiometricState('idle');
+    } else {
+      setBiometricState('failed');
+      setLoginError(result.message ?? 'Biometric authentication failed. Use your credentials.');
+      setTimeout(() => setBiometricState('idle'), 2000);
     }
   }
 
   async function onSubmit(data: LoginFormData) {
     setIsLoading(true);
+    setLoginError(null);
     try {
       const success = await login(data.email, data.password);
       if (success) {
@@ -79,18 +119,24 @@ export default function LoginScreen() {
           const bioResult = await biometricService.authenticate('Enable biometric login');
           if (bioResult.success) {
             await setBiometricEnabled(true);
-            Alert.alert('Biometrics Enabled', 'You can now sign in with biometrics on future visits.');
           }
         }
         router.replace('/expenses');
       } else {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        Alert.alert('Login Failed', 'Invalid email or password. Please try again.');
+        setLoginError('Invalid email or password. Please try again.');
       }
     } finally {
       setIsLoading(false);
     }
   }
+
+  const isDemo = Platform.OS === 'web' || !biometricAvailable;
+  const iconColor =
+    biometricState === 'success' ? Colors.categoryTravel :
+    biometricState === 'failed' ? Colors.error :
+    biometricState === 'scanning' ? Colors.accent :
+    Colors.primary;
 
   return (
     <KeyboardAvoidingView
@@ -109,6 +155,51 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.card}>
+          {/* Biometric button — always visible, prominent */}
+          <TouchableOpacity
+            style={[
+              styles.bioBtn,
+              biometricState === 'scanning' && styles.bioBtnScanning,
+              biometricState === 'success' && styles.bioBtnSuccess,
+              biometricState === 'failed' && styles.bioBtnFailed,
+            ]}
+            onPress={handleBiometricLogin}
+            disabled={biometricState === 'scanning' || biometricState === 'success'}
+            activeOpacity={0.8}
+            testID="biometric-login-button"
+            accessibilityRole="button"
+            accessibilityLabel="Login with biometrics"
+          >
+            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+              <MaterialCommunityIcons
+                name={
+                  biometricState === 'success' ? 'check-circle' :
+                  biometricState === 'failed' ? 'close-circle' :
+                  'fingerprint'
+                }
+                size={44}
+                color={iconColor}
+              />
+            </Animated.View>
+            <Text style={[styles.bioBtnLabel, { color: iconColor }]}>
+              {biometricState === 'scanning' ? 'Scanning…' :
+               biometricState === 'success' ? 'Authenticated!' :
+               biometricState === 'failed' ? 'Try Again' :
+               isDemo ? 'Demo Biometric Login' : 'Face ID / Touch ID'}
+            </Text>
+            {biometricState === 'idle' && (
+              <Text style={styles.bioBtnSub}>
+                {isDemo ? 'Tap to simulate biometric auth' : 'Use your enrolled fingerprint or face'}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <View style={styles.dividerRow}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>or sign in with password</Text>
+            <View style={styles.dividerLine} />
+          </View>
+
           <Controller
             control={control}
             name="email"
@@ -149,10 +240,17 @@ export default function LoginScreen() {
             )}
           />
 
+          {loginError && (
+            <View style={styles.errorBox}>
+              <Feather name="alert-circle" size={14} color={Colors.error} />
+              <Text style={styles.errorText}>{loginError}</Text>
+            </View>
+          )}
+
           {biometricAvailable && (
             <View style={styles.biometricRow}>
-              <Feather name="shield" size={18} color={Colors.primary} />
-              <Text style={styles.biometricLabel}>Enable Biometric Login</Text>
+              <Feather name="shield" size={16} color={Colors.primary} />
+              <Text style={styles.biometricLabel}>Enable Biometric on Next Login</Text>
               <Controller
                 control={control}
                 name="enableBiometric"
@@ -187,19 +285,6 @@ export default function LoginScreen() {
               testID="signup-button"
             />
           </View>
-
-          {isBiometricEnabled && biometricAvailable && (
-            <TouchableOpacity
-              style={styles.bioButton}
-              onPress={handleBiometricLogin}
-              accessibilityRole="button"
-              accessibilityLabel="Login with biometrics"
-            >
-              <Feather name="shield" size={22} color={Colors.primary} />
-              <Text style={styles.bioButtonText}>Login with Face ID / Touch ID</Text>
-            </TouchableOpacity>
-          )}
-
         </View>
 
         <View style={styles.demoHint}>
@@ -208,12 +293,6 @@ export default function LoginScreen() {
             Demo credentials are pre-filled — just tap LOGIN
           </Text>
         </View>
-
-        {!biometricAvailable && (
-          <Text style={styles.biometricNote}>
-            Biometric login available on iOS / Android devices
-          </Text>
-        )}
       </ScrollView>
 
       <Modal
@@ -246,7 +325,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Platform.OS === 'web' ? 100 : 60,
+    paddingVertical: Platform.OS === 'web' ? 80 : 60,
     gap: Spacing.lg,
   },
   header: { alignItems: 'center', gap: 12 },
@@ -261,49 +340,96 @@ const styles = StyleSheet.create({
     borderRadius: Radius.xl,
     padding: Spacing.lg,
     ...Shadow.card,
+    gap: 0,
   },
+
+  bioBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: Spacing.lg,
+    gap: 8,
+    borderRadius: Radius.lg,
+    borderWidth: 2,
+    borderColor: Colors.primary + '30',
+    backgroundColor: Colors.primary + '06',
+    marginBottom: Spacing.md,
+  },
+  bioBtnScanning: {
+    borderColor: Colors.accent,
+    backgroundColor: Colors.accent + '10',
+  },
+  bioBtnSuccess: {
+    borderColor: Colors.categoryTravel,
+    backgroundColor: Colors.categoryTravel + '10',
+  },
+  bioBtnFailed: {
+    borderColor: Colors.error,
+    backgroundColor: Colors.error + '10',
+  },
+  bioBtnLabel: {
+    fontSize: Typography.sizeMd,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.primary,
+  },
+  bioBtnSub: {
+    fontSize: Typography.sizeXs,
+    fontFamily: Typography.fontRegular,
+    color: Colors.textMuted,
+  },
+
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: Spacing.md,
+  },
+  dividerLine: { flex: 1, height: 1, backgroundColor: Colors.border },
+  dividerText: {
+    fontSize: Typography.sizeXs,
+    fontFamily: Typography.fontRegular,
+    color: Colors.textMuted,
+  },
+
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.error + '10',
+    borderRadius: Radius.md,
+    padding: 10,
+    marginTop: Spacing.sm,
+  },
+  errorText: {
+    flex: 1,
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontRegular,
+    color: Colors.error,
+  },
+
   biometricRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingVertical: Spacing.md,
+    paddingVertical: Spacing.sm,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
-    marginTop: Spacing.sm,
+    marginTop: Spacing.md,
   },
   biometricLabel: {
     flex: 1,
     fontSize: Typography.sizeSm,
-    fontFamily: 'Inter_500Medium',
+    fontFamily: Typography.fontMedium,
     color: Colors.textPrimary,
   },
   buttonRow: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.md },
   loginBtn: { flex: 1 },
   signupBtn: { flex: 1 },
-  bioButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: Spacing.md,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-  },
-  bioButtonText: {
-    fontSize: Typography.sizeSm,
-    fontFamily: 'Inter_500Medium',
-    color: Colors.primary,
-  },
+
   demoHint: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    marginTop: Spacing.md,
-    paddingTop: Spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.15)',
   },
   demoHintText: {
     fontSize: 12,
@@ -311,13 +437,7 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.65)',
     textAlign: 'center',
   },
-  biometricNote: {
-    fontSize: 11,
-    fontFamily: 'Inter_400Regular',
-    color: 'rgba(255,255,255,0.4)',
-    textAlign: 'center',
-    marginTop: 6,
-  },
+
   modalOverlay: {
     flex: 1,
     backgroundColor: Colors.overlayDark,
