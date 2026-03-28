@@ -44,4 +44,13 @@ async function setBiometricEnabled(enabled: boolean): Promise<void> {
   await AsyncStorage.setItem(STORAGE_KEYS.biometricEnabled, enabled ? 'true' : 'false');
 }
 
-export const authService = { login, logout, getSession, isBiometricEnabled, setBiometricEnabled };
+async function loginWithBiometric(): Promise<Session> {
+  const session: Session = {
+    email: DEMO_CREDENTIALS.email,
+    loggedInAt: new Date().toISOString(),
+  };
+  await AsyncStorage.setItem(STORAGE_KEYS.session, JSON.stringify(session));
+  return session;
+}
+
+export const authService = { login, loginWithBiometric, logout, getSession, isBiometricEnabled, setBiometricEnabled };

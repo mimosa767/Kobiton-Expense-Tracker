@@ -34,7 +34,7 @@ const loginSchema = z.object({
 type LoginFormData = z.infer<typeof loginSchema>;
 
 export default function LoginScreen() {
-  const { login, isBiometricEnabled, setBiometricEnabled, session } = useAuth();
+  const { login, loginWithBiometric, isBiometricEnabled, setBiometricEnabled, session } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [showSignupModal, setShowSignupModal] = useState(false);
@@ -61,6 +61,7 @@ export default function LoginScreen() {
   async function handleBiometricLogin() {
     const result = await biometricService.authenticate('Sign in to Kobiton Expense Tracker');
     if (result.success) {
+      await loginWithBiometric();
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace('/expenses');
     } else if (result.reason !== 'cancelled') {

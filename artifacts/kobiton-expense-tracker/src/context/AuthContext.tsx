@@ -5,6 +5,7 @@ interface AuthContextValue {
   session: Session | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<boolean>;
+  loginWithBiometric: () => Promise<void>;
   logout: () => Promise<void>;
   isBiometricEnabled: boolean;
   setBiometricEnabled: (v: boolean) => Promise<void>;
@@ -38,6 +39,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return false;
   }
 
+  async function loginWithBiometric(): Promise<void> {
+    const s = await authService.loginWithBiometric();
+    setSession(s);
+  }
+
   async function logout(): Promise<void> {
     await authService.logout();
     setSession(null);
@@ -56,7 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ session, isLoading, login, logout, isBiometricEnabled, setBiometricEnabled, refreshBiometric }}
+      value={{ session, isLoading, login, loginWithBiometric, logout, isBiometricEnabled, setBiometricEnabled, refreshBiometric }}
     >
       {children}
     </AuthContext.Provider>

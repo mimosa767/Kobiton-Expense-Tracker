@@ -80,16 +80,21 @@ export default function DebugScreen() {
   }
 
   async function handleSimulateReceipt() {
+    const sampleReceiptAsset = require('../assets/images/sample-receipt.jpg');
+    const resolvedUri = typeof sampleReceiptAsset === 'number'
+      ? `asset://${sampleReceiptAsset}`
+      : (sampleReceiptAsset as { uri: string }).uri ?? String(sampleReceiptAsset);
+
     await addExpense({
-      head: 'Food',
-      amount: 24.99,
+      head: 'Travel',
+      amount: 42.50,
       currency: 'USD-$',
       date: new Date().toISOString().split('T')[0],
-      category: 'Meals',
+      category: 'Business',
       recurring: false,
-      notes: 'Simulated receipt attachment (test mode)',
-      attachmentUri: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/320px-Camponotus_flavomarginatus_ant.jpg',
-      attachmentName: 'simulated_receipt.jpg',
+      notes: 'Simulated receipt from bundled sample asset (test mode)',
+      attachmentUri: resolvedUri,
+      attachmentName: 'sample_receipt.jpg',
     });
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     showToast('Simulated receipt expense added');

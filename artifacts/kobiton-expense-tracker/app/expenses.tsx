@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -27,6 +27,8 @@ export default function ExpensesScreen() {
   const insets = useSafeAreaInsets();
   const [toast, setToast] = useState({ visible: false, message: '', type: 'success' as 'success' | 'error' });
   const [showMenu, setShowMenu] = useState(false);
+  const versionTapCount = useRef(0);
+  const versionTapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function showToast(message: string, type: 'success' | 'error' = 'success') {
     setToast({ visible: true, message, type });
@@ -71,6 +73,20 @@ export default function ExpensesScreen() {
     ]);
   }
 
+  function handleVersionTap() {
+    versionTapCount.current += 1;
+    if (versionTapTimer.current) clearTimeout(versionTapTimer.current);
+    if (versionTapCount.current >= 7) {
+      versionTapCount.current = 0;
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.push('/debug');
+      return;
+    }
+    versionTapTimer.current = setTimeout(() => {
+      versionTapCount.current = 0;
+    }, 2000);
+  }
+
   const bottomPad = Platform.OS === 'web' ? 34 : insets.bottom;
 
   const menuActions = (
@@ -80,17 +96,6 @@ export default function ExpensesScreen() {
       )}
       {showMenu && (
         <View style={styles.dropdownMenu}>
-          <TouchableOpacity
-            style={styles.menuItem}
-            onPress={() => {
-              setShowMenu(false);
-              router.push('/debug');
-            }}
-          >
-            <Feather name="settings" size={16} color={Colors.textPrimary} />
-            <Text style={styles.menuItemText}>Dev Tools</Text>
-          </TouchableOpacity>
-          <View style={styles.menuDivider} />
           <TouchableOpacity style={styles.menuItem} onPress={handleLogout}>
             <Feather name="log-out" size={16} color={Colors.error} />
             <Text style={[styles.menuItemText, { color: Colors.error }]}>Logout</Text>
@@ -145,6 +150,16 @@ export default function ExpensesScreen() {
         <Feather name="plus" size={28} color={Colors.white} />
       </TouchableOpacity>
 
+      <TouchableOpacity
+        style={[styles.versionBadge, { bottom: bottomPad + 6 }]}
+        onPress={handleVersionTap}
+        activeOpacity={1}
+        testID="version-badge"
+        accessibilityLabel="App version"
+      >
+        <Text style={styles.versionText}>v1.0.0</Text>
+      </TouchableOpacity>
+
       <ToastMessage message={toast.message} type={toast.type} visible={toast.visible} />
     </View>
   );
@@ -193,4 +208,16 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
   },
   menuDivider: { height: 1, backgroundColor: Colors.border, marginHorizontal: 16 },
+  versionBadge: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  versionText: {
+    fontSize: 10,
+    fontFamily: Typography.fontRegular,
+    color: Colors.textMuted,
+    opacity: 0.5,
+  },
 });
