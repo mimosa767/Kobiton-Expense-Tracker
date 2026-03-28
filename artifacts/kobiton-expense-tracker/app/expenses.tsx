@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/src/context/AuthContext';
 import { useExpenses } from '@/src/context/ExpenseContext';
 import { ExpenseCard } from '@/src/components/ExpenseCard';
+import { DashboardSummary } from '@/src/components/DashboardSummary';
 import { EmptyState } from '@/src/components/EmptyState';
 import { TopBar } from '@/src/components/TopBar';
 import { ToastMessage } from '@/src/components/ToastMessage';
@@ -120,6 +121,11 @@ export default function ExpensesScreen() {
               testID={`expense-card-${item.id}`}
             />
           )}
+          ListHeaderComponent={
+            expenses.length > 0 ? (
+              <DashboardSummary expenses={expenses} />
+            ) : null
+          }
           ListEmptyComponent={
             <EmptyState
               icon="inbox"
