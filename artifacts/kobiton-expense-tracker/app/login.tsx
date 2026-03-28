@@ -42,8 +42,8 @@ export default function LoginScreen() {
   const { control, handleSubmit, formState: { errors } } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      email: '',
-      password: '',
+      email: 'test@kobiton.com',
+      password: 'kobiton123',
       enableBiometric: false,
     },
   });
@@ -199,7 +199,21 @@ export default function LoginScreen() {
               <Text style={styles.bioButtonText}>Login with Face ID / Touch ID</Text>
             </TouchableOpacity>
           )}
+
         </View>
+
+        <View style={styles.demoHint}>
+          <Feather name="info" size={13} color="rgba(255,255,255,0.6)" />
+          <Text style={styles.demoHintText}>
+            Demo credentials are pre-filled — just tap LOGIN
+          </Text>
+        </View>
+
+        {!biometricAvailable && (
+          <Text style={styles.biometricNote}>
+            Biometric login available on iOS / Android devices
+          </Text>
+        )}
       </ScrollView>
 
       <Modal
@@ -280,6 +294,29 @@ const styles = StyleSheet.create({
     fontSize: Typography.sizeSm,
     fontFamily: 'Inter_500Medium',
     color: Colors.primary,
+  },
+  demoHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: Spacing.md,
+    paddingTop: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.15)',
+  },
+  demoHintText: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: 'rgba(255,255,255,0.65)',
+    textAlign: 'center',
+  },
+  biometricNote: {
+    fontSize: 11,
+    fontFamily: 'Inter_400Regular',
+    color: 'rgba(255,255,255,0.4)',
+    textAlign: 'center',
+    marginTop: 6,
   },
   modalOverlay: {
     flex: 1,
