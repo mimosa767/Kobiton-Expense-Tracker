@@ -24,7 +24,7 @@ export default function SplashScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.logoContainer}>
-        <KobitonLogo width={220} color="white" />
+        <KobitonLogo width={260} color="white" />
         <Text style={styles.subtitle}>Expense Tracker</Text>
       </View>
       <Text style={styles.tagline}>Quality-driven expense management</Text>

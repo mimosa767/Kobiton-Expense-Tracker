@@ -104,7 +104,7 @@ export default function LoginScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <KobitonLogo width={200} color="white" />
+          <KobitonLogo width={240} color="white" />
           <Text style={styles.title}>EXPENSE TRACKER</Text>
         </View>
 
