@@ -6,7 +6,7 @@ import {
   useFonts,
 } from "@expo-google-fonts/inter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Stack } from "expo-router";
+import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -14,7 +14,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { AuthProvider } from "@/src/context/AuthContext";
+import { AuthProvider, useAuth } from "@/src/context/AuthContext";
 import { ExpenseProvider } from "@/src/context/ExpenseContext";
 import { LocationProvider } from "@/src/context/LocationContext";
 
@@ -22,7 +22,22 @@ SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
 
+const PUBLIC_ROUTES = new Set(['index', 'login', '+not-found']);
+
 function RootLayoutNav() {
+  const { session, isLoading } = useAuth();
+  const segments = useSegments();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (isLoading) return;
+    const currentRoute = segments[0] ?? 'index';
+    const isPublic = PUBLIC_ROUTES.has(currentRoute);
+    if (!session && !isPublic) {
+      router.replace('/login');
+    }
+  }, [session, isLoading, segments]);
+
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="index" />

@@ -1,15 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
-  Alert,
   Image,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -77,32 +75,35 @@ export default function ExpenseDetailScreen() {
   const insets = useSafeAreaInsets();
   const [expense, setExpense] = useState<Expense | null>(null);
   const [toast, setToast] = useState({ visible: false, message: '' });
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
-  useEffect(() => {
-    if (id) {
-      expenseStorage.getById(id).then(setExpense);
-    }
-  }, [id]);
+  useFocusEffect(
+    useCallback(() => {
+      if (id) {
+        expenseStorage.getById(id).then(setExpense);
+      }
+    }, [id])
+  );
 
   function showToast(message: string) {
     setToast({ visible: true, message });
     setTimeout(() => setToast((t) => ({ ...t, visible: false })), 3000);
   }
 
-  async function handleDelete() {
-    Alert.alert('Delete Expense', 'Are you sure you want to delete this expense?', [
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          if (!id) return;
-          await deleteExpense(id);
-          await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          router.back();
-        },
-      },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+  function handleDeletePress() {
+    setConfirmingDelete(true);
+  }
+
+  async function handleDeleteConfirm() {
+    if (!id) return;
+    setConfirmingDelete(false);
+    await deleteExpense(id);
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    router.back();
+  }
+
+  function handleDeleteCancel() {
+    setConfirmingDelete(false);
   }
 
   if (!expense) {
@@ -175,18 +176,44 @@ export default function ExpenseDetailScreen() {
       </ScrollView>
 
       <View style={[styles.actions, { paddingBottom: bottomPad + 16 }]}>
-        <AppButton
-          title="Edit"
-          variant="outline"
-          style={styles.actionBtn}
-          onPress={() => router.push(`/add-expense?id=${expense.id}`)}
-        />
-        <AppButton
-          title="Delete"
-          variant="danger"
-          style={styles.actionBtn}
-          onPress={handleDelete}
-        />
+        {confirmingDelete ? (
+          <>
+            <Text style={styles.confirmText}>Delete this expense?</Text>
+            <View style={styles.confirmRow}>
+              <AppButton
+                title="Cancel"
+                variant="outline"
+                style={styles.actionBtn}
+                onPress={handleDeleteCancel}
+                testID="delete-cancel-btn"
+              />
+              <AppButton
+                title="Confirm Delete"
+                variant="danger"
+                style={styles.actionBtn}
+                onPress={handleDeleteConfirm}
+                testID="delete-confirm-btn"
+              />
+            </View>
+          </>
+        ) : (
+          <>
+            <AppButton
+              title="Edit"
+              variant="outline"
+              style={styles.actionBtn}
+              onPress={() => router.push(`/add-expense?id=${expense.id}`)}
+              testID="detail-edit-btn"
+            />
+            <AppButton
+              title="Delete"
+              variant="danger"
+              style={styles.actionBtn}
+              onPress={handleDeletePress}
+              testID="detail-delete-btn"
+            />
+          </>
+        )}
       </View>
 
       <ToastMessage message={toast.message} visible={toast.visible} />
@@ -279,4 +306,12 @@ const styles = StyleSheet.create({
     ...Shadow.card,
   },
   actionBtn: { flex: 1 },
+  confirmText: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.error,
+    textAlign: 'center',
+    marginBottom: Spacing.sm,
+  },
+  confirmRow: { flexDirection: 'row', gap: Spacing.md },
 });
