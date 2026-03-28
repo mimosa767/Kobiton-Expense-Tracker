@@ -185,11 +185,11 @@ export default function LoginScreen() {
               {biometricState === 'scanning' ? 'Scanning…' :
                biometricState === 'success' ? 'Authenticated!' :
                biometricState === 'failed' ? 'Try Again' :
-               isDemo ? 'Demo Biometric Login' : 'Face ID / Touch ID'}
+               'Biometric Login'}
             </Text>
             {biometricState === 'idle' && (
               <Text style={styles.bioBtnSub}>
-                {isDemo ? 'Tap to simulate biometric auth' : 'Use your enrolled fingerprint or face'}
+                Use your fingerprint or face to sign in
               </Text>
             )}
           </TouchableOpacity>
