@@ -163,12 +163,7 @@ export default function ExpensesScreen() {
     setShowMenu((v) => !v);
   }
 
-  function handleCrashApp() {
-    setShowMenu(false);
-    setTimeout(() => {
-      throw new Error('[Kobiton] Intentional crash triggered from menu');
-    }, 100);
-  }
+  function handleCrashApp() { setShowMenu(false); router.push('/crash-app'); }
 
   function handleGuide() { setShowMenu(false); router.push('/guide'); }
   function handleKobitonSDK() { setShowMenu(false); router.push('/kobiton-sdk'); }

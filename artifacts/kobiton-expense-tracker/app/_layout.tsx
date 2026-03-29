@@ -57,6 +57,7 @@ function RootLayoutNav() {
       <Stack.Screen name="system-metrics" />
       <Stack.Screen name="kobiton-sdk" />
       <Stack.Screen name="guide" />
+      <Stack.Screen name="crash-app" />
     </Stack>
   );
 }
