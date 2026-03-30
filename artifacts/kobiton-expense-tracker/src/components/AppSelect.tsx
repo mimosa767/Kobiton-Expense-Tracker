@@ -47,11 +47,15 @@ export function AppSelect({ label, value, options, onChange, placeholder = 'Sele
       {!!error && <Text style={styles.error}>{error}</Text>}
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <Pressable style={styles.overlay} onPress={() => setOpen(false)}>
+        <Pressable style={styles.overlay} onPress={() => setOpen(false)} testID={testID ? `${testID}-overlay` : 'select-overlay'}>
           <SafeAreaView style={styles.sheet}>
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>{label}</Text>
-              <TouchableOpacity onPress={() => setOpen(false)}>
+              <TouchableOpacity
+                onPress={() => setOpen(false)}
+                testID={testID ? `${testID}-close-btn` : 'select-close-btn'}
+                accessibilityLabel={`Close ${label} picker`}
+              >
                 <Feather name="x" size={22} color={Colors.textSecondary} />
               </TouchableOpacity>
             </View>
@@ -67,6 +71,7 @@ export function AppSelect({ label, value, options, onChange, placeholder = 'Sele
                   }}
                   accessibilityRole="menuitem"
                   accessibilityLabel={item}
+                  testID={testID ? `${testID}-option-${item.replace(/[\s/]+/g, '-').toLowerCase()}` : `select-option-${item.replace(/[\s/]+/g, '-').toLowerCase()}`}
                 >
                   <Text style={[styles.optionText, item === value && styles.optionTextSelected]}>
                     {item}

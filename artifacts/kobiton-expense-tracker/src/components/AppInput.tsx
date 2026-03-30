@@ -45,6 +45,7 @@ export function AppInput({ label, error, required, rightIcon, isPassword, style,
             onPress={() => setShowPassword((v) => !v)}
             style={styles.iconBtn}
             accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+            testID={testID ? `${testID}-show-password` : 'show-password-toggle'}
           >
             <Feather name={showPassword ? 'eye-off' : 'eye'} size={18} color={Colors.textSecondary} />
           </TouchableOpacity>

@@ -10,14 +10,16 @@ interface Props {
   onBackPress?: () => void;
   rightAction?: React.ReactNode;
   testID?: string;
+  backTestID?: string;
+  menuTestID?: string;
 }
 
-export function TopBar({ title, onMenuPress, onBackPress, rightAction, testID }: Props) {
+export function TopBar({ title, onMenuPress, onBackPress, rightAction, testID, backTestID, menuTestID }: Props) {
   const insets = useSafeAreaInsets();
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
   return (
-    <View style={[styles.container, { paddingTop: topPad }]} testID={testID}>
+    <View style={[styles.container, { paddingTop: topPad }]} testID={testID ?? 'topbar'}>
       <View style={styles.inner}>
         {onBackPress ? (
           <TouchableOpacity
@@ -25,6 +27,7 @@ export function TopBar({ title, onMenuPress, onBackPress, rightAction, testID }:
             style={styles.iconBtn}
             accessibilityRole="button"
             accessibilityLabel="Go back"
+            testID={backTestID ?? 'topbar-back-btn'}
           >
             <Feather name="arrow-left" size={22} color={Colors.white} />
           </TouchableOpacity>
@@ -34,6 +37,7 @@ export function TopBar({ title, onMenuPress, onBackPress, rightAction, testID }:
             style={styles.iconBtn}
             accessibilityRole="button"
             accessibilityLabel="Open menu"
+            testID={menuTestID ?? 'topbar-menu-btn'}
           >
             <Feather name="menu" size={22} color={Colors.white} />
           </TouchableOpacity>

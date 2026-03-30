@@ -208,7 +208,7 @@ function GuideCard({ section, isOpen, onToggle }: {
 }) {
   return (
     <View style={styles.card}>
-      <Pressable style={styles.cardHeader} onPress={onToggle} accessibilityRole="button">
+      <Pressable style={styles.cardHeader} onPress={onToggle} accessibilityRole="button" testID={`guide-section-${section.id}`}>
         <View style={[styles.iconBox, { backgroundColor: section.color + '18' }]}>
           <Feather name={section.icon} size={20} color={section.color} />
         </View>
@@ -300,11 +300,11 @@ export default function GuideScreen() {
 
         {/* Quick actions */}
         <View style={styles.quickRow}>
-          <TouchableOpacity style={styles.quickBtn} onPress={handleExpandAll}>
+          <TouchableOpacity style={styles.quickBtn} onPress={handleExpandAll} testID="guide-expand-all-btn">
             <Feather name="maximize-2" size={14} color={Colors.primary} />
             <Text style={styles.quickBtnText}>Expand All</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.quickBtn} onPress={handleCollapseAll}>
+          <TouchableOpacity style={styles.quickBtn} onPress={handleCollapseAll} testID="guide-collapse-all-btn">
             <Feather name="minimize-2" size={14} color={Colors.textSecondary} />
             <Text style={[styles.quickBtnText, { color: Colors.textSecondary }]}>Collapse All</Text>
           </TouchableOpacity>

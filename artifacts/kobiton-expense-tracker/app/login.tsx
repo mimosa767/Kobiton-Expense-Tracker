@@ -240,13 +240,13 @@ export default function LoginScreen() {
           />
 
           {loginError && (
-            <View style={styles.errorBox}>
+            <View style={styles.errorBox} testID="login-error-box">
               <Feather
                 name={Platform.OS === 'web' ? 'info' : 'alert-circle'}
                 size={14}
                 color={Platform.OS === 'web' ? Colors.accent : Colors.error}
               />
-              <Text style={[styles.errorText, Platform.OS === 'web' && styles.infoText]}>
+              <Text style={[styles.errorText, Platform.OS === 'web' && styles.infoText]} testID="login-error-text">
                 {loginError}
               </Text>
             </View>
@@ -306,8 +306,8 @@ export default function LoginScreen() {
         animationType="fade"
         onRequestClose={() => setShowSignupModal(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setShowSignupModal(false)}>
-          <View style={styles.modalCard}>
+        <Pressable style={styles.modalOverlay} onPress={() => setShowSignupModal(false)} testID="signup-modal-overlay">
+          <View style={styles.modalCard} testID="signup-modal-card">
             <Text style={styles.modalTitle}>Signup Coming Soon</Text>
             <Text style={styles.modalBody}>
               Account registration is not yet available. Use the demo credentials to explore the app.
@@ -315,7 +315,7 @@ export default function LoginScreen() {
             <Text style={styles.demoCredentials}>
               Email: test@kobiton.com{'\n'}Password: kobiton123
             </Text>
-            <AppButton title="Got it" onPress={() => setShowSignupModal(false)} />
+            <AppButton title="Got it" onPress={() => setShowSignupModal(false)} testID="signup-modal-close-btn" />
           </View>
         </Pressable>
       </Modal>

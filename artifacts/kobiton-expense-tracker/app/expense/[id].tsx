@@ -128,21 +128,21 @@ export default function ExpenseDetailScreen() {
         style={styles.scroll}
         contentContainerStyle={[styles.content, { paddingBottom: bottomPad + 120 }]}
       >
-        <View style={styles.card}>
+        <View style={styles.card} testID="expense-detail-card">
           <View style={styles.cardHeader}>
             <View style={styles.headRow}>
-              <Text style={styles.head}>{expense.head}</Text>
-              <View style={[styles.categoryBadge, { backgroundColor: catColor + '18' }]}>
+              <Text style={styles.head} testID="detail-head-text">{expense.head}</Text>
+              <View style={[styles.categoryBadge, { backgroundColor: catColor + '18' }]} testID="detail-category-badge">
                 <Text style={[styles.categoryText, { color: catColor }]}>{expense.category}</Text>
               </View>
             </View>
-            <Text style={styles.amount}>
+            <Text style={styles.amount} testID="detail-amount-text">
               {expense.currency.split('-')[1]}{expense.amount.toFixed(2)}
               <Text style={styles.currency}> {expense.currency}</Text>
             </Text>
           </View>
 
-          <View style={styles.detailsSection}>
+          <View style={styles.detailsSection} testID="detail-fields-section">
             <DetailRow label="Date" value={formatDate(expense.date)} />
             <DetailRow label="Currency" value={expense.currency} />
             <DetailRow label="Category" value={expense.category} />
@@ -150,14 +150,14 @@ export default function ExpenseDetailScreen() {
             {expense.notes ? (
               <View style={[detailStyles.row, { alignItems: 'flex-start' }]}>
                 <Text style={detailStyles.label}>Notes</Text>
-                <Text style={[detailStyles.value, { flex: 2 }]}>{expense.notes}</Text>
+                <Text style={[detailStyles.value, { flex: 2 }]} testID="detail-notes-text">{expense.notes}</Text>
               </View>
             ) : null}
           </View>
         </View>
 
         {expense.attachmentUri && (
-          <View style={styles.receiptCard}>
+          <View style={styles.receiptCard} testID="detail-receipt-card">
             <View style={styles.receiptHeader}>
               <Feather name="paperclip" size={16} color={Colors.textSecondary} />
               <Text style={styles.receiptTitle}>Receipt</Text>
@@ -170,6 +170,7 @@ export default function ExpenseDetailScreen() {
               style={styles.receiptImage}
               resizeMode="cover"
               accessibilityLabel={`Receipt for ${expense.head}`}
+              testID="detail-receipt-image"
             />
           </View>
         )}

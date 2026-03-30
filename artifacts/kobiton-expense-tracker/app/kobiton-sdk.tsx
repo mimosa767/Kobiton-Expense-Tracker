@@ -213,6 +213,7 @@ export default function KobitonSDKScreen() {
               key={tab}
               style={[styles.tab, activeTab === tab && styles.tabActive]}
               onPress={() => setActiveTab(tab)}
+              testID={`sdk-tab-${tab}`}
             >
               <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
                 {tab === 'session' ? 'Session'
@@ -394,7 +395,7 @@ export default function KobitonSDKScreen() {
           <View style={styles.card}>
             <View style={styles.logHeader}>
               <Text style={styles.sectionTitle}>Event Log</Text>
-              <TouchableOpacity onPress={handleClearLogs} style={styles.clearBtn}>
+              <TouchableOpacity onPress={handleClearLogs} style={styles.clearBtn} testID="sdk-clear-events-btn">
                 <Feather name="trash-2" size={14} color={Colors.textMuted} />
                 <Text style={styles.clearBtnText}>Clear</Text>
               </TouchableOpacity>
@@ -423,7 +424,7 @@ export default function KobitonSDKScreen() {
           <View style={styles.card}>
             <View style={styles.logHeader}>
               <Text style={styles.sectionTitle}>Network Log</Text>
-              <TouchableOpacity onPress={handleClearLogs} style={styles.clearBtn}>
+              <TouchableOpacity onPress={handleClearLogs} style={styles.clearBtn} testID="sdk-clear-network-btn">
                 <Feather name="trash-2" size={14} color={Colors.textMuted} />
                 <Text style={styles.clearBtnText}>Clear</Text>
               </TouchableOpacity>

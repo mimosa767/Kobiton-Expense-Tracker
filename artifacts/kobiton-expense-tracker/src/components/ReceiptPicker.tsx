@@ -86,6 +86,7 @@ export function ReceiptPicker({ uri, name, onChange, testID }: Props) {
             style={[styles.actionBtn, Platform.OS === 'web' && styles.actionBtnDisabled]}
             accessibilityRole="button"
             accessibilityLabel="Retake photo"
+            testID="attachment-retake-btn"
           >
             <Feather name="camera" size={15} color={Platform.OS === 'web' ? Colors.textMuted : Colors.primary} />
             <Text style={[styles.actionBtnText, Platform.OS === 'web' && { color: Colors.textMuted }]}>Retake</Text>
@@ -95,6 +96,7 @@ export function ReceiptPicker({ uri, name, onChange, testID }: Props) {
             style={styles.actionBtn}
             accessibilityRole="button"
             accessibilityLabel="Choose different photo from gallery"
+            testID="attachment-gallery-change-btn"
           >
             <Feather name="image" size={15} color={Colors.primary} />
             <Text style={styles.actionBtnText}>Gallery</Text>
@@ -104,6 +106,7 @@ export function ReceiptPicker({ uri, name, onChange, testID }: Props) {
             style={[styles.actionBtn, styles.removeBtn]}
             accessibilityRole="button"
             accessibilityLabel="Remove receipt"
+            testID="attachment-remove-btn"
           >
             <Feather name="trash-2" size={15} color={Colors.error} />
             <Text style={[styles.actionBtnText, { color: Colors.error }]}>Remove</Text>

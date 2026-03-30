@@ -26,15 +26,17 @@ function DebugRow({
   subtitle,
   onPress,
   danger,
+  testID,
 }: {
   icon: keyof typeof Feather.glyphMap;
   title: string;
   subtitle: string;
   onPress: () => void;
   danger?: boolean;
+  testID?: string;
 }) {
   return (
-    <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.8}>
+    <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.8} testID={testID}>
       <View style={[styles.rowIcon, danger && styles.rowIconDanger]}>
         <Feather name={icon} size={20} color={danger ? Colors.error : Colors.primary} />
       </View>
@@ -154,12 +156,14 @@ export default function DebugScreen() {
             title="Load Sample Expenses"
             subtitle="Replaces all expenses with 7 sample fixtures"
             onPress={handleSeedSamples}
+            testID="debug-seed-samples"
           />
           <DebugRow
             icon="paperclip"
             title="Simulate Receipt Attachment"
             subtitle="Adds an expense with a mock receipt image URI"
             onPress={handleSimulateReceipt}
+            testID="debug-simulate-receipt"
           />
           <DebugRow
             icon="trash-2"
@@ -167,6 +171,7 @@ export default function DebugScreen() {
             subtitle="Delete all stored expenses from local storage"
             onPress={handleClearAll}
             danger
+            testID="debug-clear-all"
           />
         </View>
 
@@ -178,6 +183,7 @@ export default function DebugScreen() {
             subtitle="Throws an unhandled exception to test crash reporting"
             onPress={handleCrash}
             danger
+            testID="debug-crash-app"
           />
         </View>
 
