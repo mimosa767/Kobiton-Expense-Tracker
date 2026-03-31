@@ -48,7 +48,9 @@
           "apiKey": "",
           "baseUrl": "https://api.kobiton.com",
           "enableNetworkCapture": true,
-          "enableCrashReporting": true
+          "enableCrashReporting": true,
+          "biometricSupport": true,
+          "imageInjectionSupport": true
         }
       ]
     ],

@@ -361,7 +361,7 @@ export default function KobitonSDKScreen() {
               </View>
             </View>
 
-            {/* EAS Build Guide */}
+            {/* iOS Build Guide */}
             <View style={[styles.card, styles.guideCard]}>
               <View style={styles.guideHeader}>
                 <Feather name="package" size={16} color={Colors.primary} />
@@ -384,7 +384,41 @@ export default function KobitonSDKScreen() {
                 </View>
               ))}
               <View style={styles.codeBlock}>
-                <Text style={styles.codeText}>{`"plugins": [\n  ["./plugins/withKobitonSDK", {\n    "apiKey": "kbt_YOUR_KEY"\n  }]\n]`}</Text>
+                <Text style={styles.codeText}>{`"plugins": [\n  ["./plugins/withKobitonSDK", {\n    "apiKey": "kbt_YOUR_KEY",\n    "imageInjectionSupport": true\n  }]\n]`}</Text>
+              </View>
+            </View>
+
+            {/* Android Image Injection Guide */}
+            <View style={[styles.card, styles.androidGuideCard]}>
+              <View style={styles.guideHeader}>
+                <Feather name="camera" size={16} color={Colors.accent} />
+                <Text style={[styles.guideTitle, { color: Colors.accent }]}>Android Image Injection SDK</Text>
+              </View>
+              <Text style={styles.guideBody}>
+                Kobiton's camera2.aar replaces the stock Android camera2 library so the platform can inject images and video into the camera feed during test sessions — no app logic changes required.
+              </Text>
+              {[
+                ['1', 'Download camera2.aar from the Kobiton SDK repository:\nhttps://kobiton.s3.amazonaws.com/downloads/camera2.aar'],
+                ['2', 'Place camera2.aar in android/app/libs/ — the Expo plugin creates this directory automatically after expo prebuild.'],
+                ['3', 'Set imageInjectionSupport: true in app.json (see below). The plugin then patches build.gradle and AndroidManifest.xml automatically.'],
+                ['4', 'Replace android.hardware.camera2.* imports with kobiton.hardware.camera2.* equivalents in any custom native modules (see KOBITON_CAMERA2_PATCH.md generated in android/).'],
+                ['5', 'Update CameraManager init: replace getSystemService(Context.CAMERA_SERVICE) with CameraManager.getInstance(context).'],
+                ['6', 'Run: eas build --platform android --profile preview'],
+              ].map(([n, text]) => (
+                <View key={n} style={styles.guideStep}>
+                  <View style={[styles.guideStepNum, { backgroundColor: Colors.accent }]}>
+                    <Text style={styles.guideStepNumText}>{n}</Text>
+                  </View>
+                  <Text style={styles.guideStepText}>{text}</Text>
+                </View>
+              ))}
+              <Text style={styles.patchTitle}>What the plugin patches automatically</Text>
+              <View style={styles.codeBlock}>
+                <Text style={styles.codeText}>{`// build.gradle — added by plugin\ndependencies {\n  implementation fileTree(\n    dir: 'libs', include: ['*.aar']\n  )\n}\n\n// AndroidManifest.xml — added by plugin\n<service android:name=\n  "kobiton.hardware.camera2\n   .ImageInjectionClient" />\n<uses-permission android:name=\n  "android.permission.INTERNET" />\n<uses-permission android:name=\n  "android.permission\n   .ACCESS_NETWORK_STATE" />`}</Text>
+              </View>
+              <Text style={styles.patchTitle}>Import replacements (manual)</Text>
+              <View style={styles.codeBlock}>
+                <Text style={styles.codeText}>{`// Replace (android.*) → (kobiton.*)\nandroid.hardware.camera2.CameraManager\n  → kobiton.hardware.camera2.CameraManager\nandroid.hardware.camera2.CameraDevice\n  → kobiton.hardware.camera2.CameraDevice\nandroid.media.ImageReader\n  → kobiton.media.ImageReader\n\n// CameraManager init\nCameraManager.getInstance(context)\n  // replaces getSystemService(CAMERA_SERVICE)`}</Text>
               </View>
             </View>
           </>
@@ -671,6 +705,14 @@ const styles = StyleSheet.create({
   instrBtnText: { fontSize: Typography.sizeSm, fontFamily: Typography.fontMedium, color: Colors.textPrimary },
 
   guideCard: { borderLeftWidth: 3, borderLeftColor: Colors.primary },
+  androidGuideCard: { borderLeftWidth: 3, borderLeftColor: Colors.accent },
+  patchTitle: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.textSecondary,
+    marginTop: 12,
+    marginBottom: 4,
+  },
   guideHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   guideTitle: { fontSize: Typography.sizeMd, fontFamily: Typography.fontSemiBold, color: Colors.primary },
   guideBody: { fontSize: Typography.sizeSm, fontFamily: Typography.fontRegular, color: Colors.textSecondary, marginBottom: 10, lineHeight: 20 },
