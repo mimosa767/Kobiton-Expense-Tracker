@@ -139,7 +139,7 @@ export default function KobitonSDKScreen() {
 
   return (
     <View style={styles.root}>
-      <TopBar title="Kobiton SDK" onBackPress={() => router.back()} />
+      <TopBar title="Kobiton SDK" onBackPress={() => router.back()} backTestID="topbar-back-kobiton-sdk" />
 
       <ScrollView
         style={styles.scroll}

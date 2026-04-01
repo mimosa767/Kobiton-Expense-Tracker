@@ -257,6 +257,7 @@ export default function AddExpenseScreen() {
       <TopBar
         title={isEditing ? 'Edit Expense' : 'Add Expense'}
         onBackPress={handleBack}
+        backTestID={isEditing ? 'topbar-back-edit-expense' : 'topbar-back-add-expense'}
       />
 
       <KeyboardAvoidingView

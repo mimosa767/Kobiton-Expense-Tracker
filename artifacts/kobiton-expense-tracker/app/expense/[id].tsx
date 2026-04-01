@@ -109,7 +109,7 @@ export default function ExpenseDetailScreen() {
   if (!expense) {
     return (
       <View style={styles.root}>
-        <TopBar title="Expense Detail" onBackPress={() => router.back()} />
+        <TopBar title="Expense Detail" onBackPress={() => router.back()} backTestID="topbar-back-expense-detail" />
         <View style={styles.loading}>
           <Text style={styles.loadingText}>Loading...</Text>
         </View>
@@ -122,7 +122,7 @@ export default function ExpenseDetailScreen() {
 
   return (
     <View style={styles.root}>
-      <TopBar title="Expense Detail" onBackPress={() => router.back()} />
+      <TopBar title="Expense Detail" onBackPress={() => router.back()} backTestID="topbar-back-expense-detail" />
 
       <ScrollView
         style={styles.scroll}

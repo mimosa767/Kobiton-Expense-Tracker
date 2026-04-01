@@ -220,7 +220,7 @@ export default function MediaGalleryScreen() {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} testID="topbar-back-media-gallery">
           <Feather name="arrow-left" size={22} color={Colors.white} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Media Gallery</Text>

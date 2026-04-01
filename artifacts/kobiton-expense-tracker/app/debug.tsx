@@ -129,7 +129,7 @@ export default function DebugScreen() {
 
   return (
     <View style={styles.root}>
-      <TopBar title="Dev Tools" onBackPress={() => router.back()} />
+      <TopBar title="Dev Tools" onBackPress={() => router.back()} backTestID="topbar-back-debug" />
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: bottomPad + 24 }]}

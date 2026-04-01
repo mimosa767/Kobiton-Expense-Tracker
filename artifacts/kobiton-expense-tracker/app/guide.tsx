@@ -280,7 +280,7 @@ export default function GuideScreen() {
 
   return (
     <View style={styles.root}>
-      <TopBar title="Feature Guide" onBackPress={() => router.back()} />
+      <TopBar title="Feature Guide" onBackPress={() => router.back()} backTestID="topbar-back-guide" />
 
       <ScrollView
         style={styles.scroll}
