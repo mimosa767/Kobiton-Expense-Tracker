@@ -555,46 +555,84 @@ function withKobitonAndroidImageInjection(config, options) {
 /**
  * Android Biometric SDK integration.
  *
- * Manual steps (cannot be fully automated without the .aar file):
- *   1. Download KobitonBiometric.aar from the Kobiton portal
- *   2. Place it in android/app/libs/
- *   3. build.gradle: implementation fileTree(dir: 'libs', include: ['*.aar'])
- *      (handled automatically if imageInjectionSupport is also true)
+ * Based on: https://docs.kobiton.com/apps/biometric-authentication-sdk/add-the-sdk-to-your-android-app
+ *
+ * Prerequisites (app must meet these before the SDK will work):
+ *   - Android 9 (API 28) or later ONLY
+ *   - Uses BiometricPrompt.AuthenticationCallback or BiometricPrompt.PromptInfo
+ *   - Does NOT use BiometricPrompt.CryptoObject (higher-level security — unsupported)
+ *   - Does NOT use deprecated FingerprintManager
+ *
+ * What this automates:
+ *   1. Creates android/app/libs/ directory and writes a README + class-replacement guide
+ *   2. Patches android/app/build.gradle to load KobitonBiometric.aar from libs/
+ *      (skipped if imageInjectionSupport is also true — that already adds '*.aar')
+ *   3. Patches AndroidManifest.xml:
+ *        - Adds USE_BIOMETRIC permission (requiredFeature="false")
+ *        - Adds INTERNET permission (if not already present)
+ *        - Sets android:usesCleartextTraffic="true" on <application>
+ *   4. Writes KOBITON_BIOMETRIC_PATCH.md documenting the class replacements
+ *
+ * What you must do manually:
+ *   - Download KobitonBiometric.aar and place it in android/app/libs/
+ *   - Replace BiometricManager and BiometricPrompt class references — see KOBITON_BIOMETRIC_PATCH.md
+ *   - Remove any BiometricPrompt.CryptoObject usage
+ *   - Ensure app targets Android 9+ only
+ *
+ * Known issue:
+ *   Using Toast inside BiometricPrompt.AuthenticationCallback will cause a
+ *   NullPointerException crash during Kobiton sessions. Remove Toast calls from
+ *   authentication callbacks before building.
  */
 function withKobitonAndroidBiometric(config, options) {
   if (!options.biometricSupport) return config;
 
-  return withDangerousMod(config, [
+  // Step 1: Create libs directory, README, and class-replacement patch guide
+  config = withDangerousMod(config, [
     'android',
     async (mod) => {
-      const libsDir = path.join(mod.modRequest.projectRoot, 'android', 'app', 'libs');
+      const projectRoot = mod.modRequest.projectRoot;
+      const libsDir = path.join(projectRoot, 'android', 'app', 'libs');
       if (!fs.existsSync(libsDir)) fs.mkdirSync(libsDir, { recursive: true });
 
       const readmeContent = [
-        'Kobiton Biometric SDK for Android',
-        '==================================',
+        'Kobiton Biometric Authentication SDK for Android',
+        '=================================================',
         '',
-        'To enable biometric injection on Android Kobiton devices:',
+        'Reference: https://docs.kobiton.com/apps/biometric-authentication-sdk/add-the-sdk-to-your-android-app',
         '',
-        '1. Download KobitonBiometric.aar from the Kobiton portal:',
-        '   https://portal.kobiton.com/settings/biometric-sdk',
+        'PREREQUISITES — your app must meet ALL of the following:',
+        '  ✓  Targets Android 9 (API 28) or later ONLY',
+        '  ✓  Uses BiometricPrompt.AuthenticationCallback or BiometricPrompt.PromptInfo',
+        '  ✗  Must NOT use BiometricPrompt.CryptoObject (higher-level security — unsupported)',
+        '  ✗  Must NOT use the deprecated FingerprintManager API',
+        '',
+        'SETUP',
+        '-----',
+        '',
+        '1. Download KobitonBiometric.aar:',
+        '   Contact Kobiton support or portal.kobiton.com → Settings → Biometric SDK',
         '',
         '2. Place KobitonBiometric.aar in this directory (android/app/libs/)',
         '',
-        '3. The withKobitonSDK config plugin automatically adds the following',
-        '   to android/app/build.gradle:',
+        '3. The withKobitonSDK config plugin automatically patches:',
+        '   a) build.gradle — adds fileTree dependency for KobitonBiometric.aar',
+        '   b) AndroidManifest.xml — adds USE_BIOMETRIC permission, INTERNET permission,',
+        '      and usesCleartextTraffic="true" on <application>',
         '',
-        "   dependencies {",
-        "     implementation fileTree(dir: 'libs', include: ['*.aar'])",
-        "   }",
+        '4. Replace BiometricManager and BiometricPrompt class references.',
+        '   See KOBITON_BIOMETRIC_PATCH.md in android/ for a full find-and-replace table.',
         '',
-        '4. Disable .CryptoObject in your BiometricPrompt.AuthenticationCallback',
-        '   (Kobiton requirement — see docs.kobiton.com/apps/biometric-authentication-sdk)',
+        '5. Remove any Toast calls from BiometricPrompt.AuthenticationCallback.',
+        '   (Known issue: Toast in auth callbacks causes NullPointerException in Kobiton sessions)',
         '',
-        '5. Rebuild: eas build --platform android --profile preview',
+        '6. Rebuild: eas build --platform android --profile preview',
         '',
-        'The Kobiton platform then sends pass/fail via:',
+        'TESTING',
+        '-------',
+        'The Kobiton platform injects biometric pass/fail via:',
         "  driver.execute('mobile:biometrics-authenticate', {'result': 'passed'})",
+        "  driver.execute('mobile:biometrics-authenticate', {'result': 'failed'})",
       ].join('\n');
 
       fs.writeFileSync(
@@ -602,9 +640,119 @@ function withKobitonAndroidBiometric(config, options) {
         readmeContent,
         'utf8'
       );
+
+      const patchContent = [
+        '# Kobiton Biometric SDK – Class Replacement Guide',
+        '',
+        'After placing KobitonBiometric.aar in android/app/libs/ and rebuilding,',
+        'replace all stock Android biometric class references with the Kobiton equivalents.',
+        '',
+        'Reference: https://docs.kobiton.com/apps/biometric-authentication-sdk/add-the-sdk-to-your-android-app',
+        '',
+        '## Find & Replace Table',
+        '',
+        '| Replace (*.Biometric*) | With (com.kobiton.biometric.*) |',
+        '|---|---|',
+        '| *.BiometricManager | com.kobiton.biometric.BiometricManager |',
+        '| *.BiometricPrompt | com.kobiton.biometric.BiometricPrompt |',
+        '',
+        '## Example import changes',
+        '',
+        '### Before:',
+        '```kotlin',
+        'import androidx.biometric.BiometricManager',
+        'import androidx.biometric.BiometricPrompt',
+        '```',
+        '',
+        '### After:',
+        '```kotlin',
+        'import com.kobiton.biometric.BiometricManager',
+        'import com.kobiton.biometric.BiometricPrompt',
+        '```',
+        '',
+        '## Prerequisites reminder',
+        '',
+        '- App targets Android 9 (API 28) or later ONLY',
+        '- Uses BiometricPrompt.AuthenticationCallback or BiometricPrompt.PromptInfo',
+        '- Does NOT use BiometricPrompt.CryptoObject',
+        '- Does NOT use deprecated FingerprintManager',
+        '',
+        '## Known issue: Toast crash',
+        '',
+        'Using Toast inside BiometricPrompt.AuthenticationCallback causes:',
+        '  java.lang.NullPointerException: Can\'t toast on a thread that has not called Looper.prepare()',
+        '',
+        'Remove all Toast calls from authentication callbacks before building with the Kobiton SDK.',
+        '',
+        '## What the plugin patches automatically (AndroidManifest.xml)',
+        '',
+        '```xml',
+        '<!-- Added to <manifest> -->',
+        '<uses-permission android:name="android.permission.USE_BIOMETRIC"',
+        '    android:requiredFeature="false"/>',
+        '<uses-permission android:name="android.permission.INTERNET"/>',
+        '',
+        '<!-- Added to <application> -->',
+        'android:usesCleartextTraffic="true"',
+        '```',
+      ].join('\n');
+
+      fs.writeFileSync(
+        path.join(projectRoot, 'android', 'KOBITON_BIOMETRIC_PATCH.md'),
+        patchContent,
+        'utf8'
+      );
+
       return mod;
     },
   ]);
+
+  // Step 2: Patch build.gradle — only needed if image injection isn't already patching it
+  // Image injection uses '*.aar' wildcard which covers KobitonBiometric.aar too.
+  // For biometric-only builds we add a specific KobitonBiometric.aar entry.
+  if (!options.imageInjectionSupport) {
+    config = withAppBuildGradle(config, (mod) => {
+      const contents = mod.modResults.contents;
+      if (!contents.includes("fileTree(dir: 'libs'")) {
+        mod.modResults.contents = contents.replace(
+          /dependencies\s*\{/,
+          `dependencies {\n    // Kobiton Biometric SDK\n    implementation fileTree(dir: 'libs', include: ['KobitonBiometric.aar'])`
+        );
+      }
+      return mod;
+    });
+  }
+
+  // Step 3: Patch AndroidManifest.xml with biometric-specific requirements
+  config = withAndroidManifest(config, (mod) => {
+    const manifest = mod.modResults.manifest;
+
+    // Add required permissions to <manifest>
+    const permissions = manifest['uses-permission'] ?? [];
+    const neededPermissions = [
+      { name: 'android.permission.USE_BIOMETRIC', extra: { 'android:requiredFeature': 'false' } },
+      { name: 'android.permission.INTERNET' },
+    ];
+    for (const { name, extra } of neededPermissions) {
+      if (!permissions.some((p) => p.$?.['android:name'] === name)) {
+        permissions.push({ $: { 'android:name': name, ...(extra ?? {}) } });
+      }
+    }
+    manifest['uses-permission'] = permissions;
+
+    // Add usesCleartextTraffic="true" to <application>
+    const app = manifest.application?.[0];
+    if (app) {
+      app.$ = app.$ ?? {};
+      if (!app.$['android:usesCleartextTraffic']) {
+        app.$['android:usesCleartextTraffic'] = 'true';
+      }
+    }
+
+    return mod;
+  });
+
+  return config;
 }
 
 // ─── Main plugin ─────────────────────────────────────────────────────────────

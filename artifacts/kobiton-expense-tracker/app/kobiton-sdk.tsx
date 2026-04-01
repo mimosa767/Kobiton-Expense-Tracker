@@ -455,6 +455,56 @@ export default function KobitonSDKScreen() {
                 <Text style={styles.codeText}>{`// Replace (android.*) → (kobiton.*)\nandroid.hardware.camera2.CameraManager\n  → kobiton.hardware.camera2.CameraManager\nandroid.hardware.camera2.CameraDevice\n  → kobiton.hardware.camera2.CameraDevice\nandroid.media.ImageReader\n  → kobiton.media.ImageReader\n\n// CameraManager init\nCameraManager.getInstance(context)\n  // replaces getSystemService(CAMERA_SERVICE)`}</Text>
               </View>
             </View>
+
+            {/* Android Biometric SDK Guide */}
+            <View style={[styles.card, styles.androidBioCard]}>
+              <View style={styles.guideHeader}>
+                <Feather name="shield" size={16} color={Colors.categoryMeals} />
+                <Text style={[styles.guideTitle, { color: Colors.categoryMeals }]}>Android Biometric SDK</Text>
+              </View>
+              <Text style={styles.guideBody}>
+                KobitonBiometric.aar wraps Android's BiometricPrompt so the Kobiton platform can remotely inject pass or fail signals into the biometric prompt during test sessions.
+              </Text>
+
+              <Text style={styles.patchTitle}>Prerequisites (must all be met)</Text>
+              {[
+                ['✓', 'App targets Android 9 (API 28) or later only'],
+                ['✓', 'Uses BiometricPrompt.AuthenticationCallback or BiometricPrompt.PromptInfo'],
+                ['✗', 'Must NOT use BiometricPrompt.CryptoObject — unsupported by Kobiton'],
+                ['✗', 'Must NOT use deprecated FingerprintManager'],
+              ].map(([mark, text], i) => (
+                <View key={i} style={styles.prereqRow}>
+                  <Text style={[styles.prereqMark, { color: mark === '✓' ? Colors.categoryTravel : Colors.error }]}>{mark}</Text>
+                  <Text style={styles.guideStepText}>{text}</Text>
+                </View>
+              ))}
+
+              {[
+                ['1', 'Download KobitonBiometric.aar from the Kobiton portal:\nportal.kobiton.com → Settings → Biometric SDK'],
+                ['2', 'Place KobitonBiometric.aar in android/app/libs/ (created automatically after expo prebuild).'],
+                ['3', 'Set biometricSupport: true in app.json. The plugin then patches build.gradle, AndroidManifest.xml, and writes KOBITON_BIOMETRIC_PATCH.md.'],
+                ['4', 'Replace class references — see KOBITON_BIOMETRIC_PATCH.md in android/:\n• *.BiometricManager → com.kobiton.biometric.BiometricManager\n• *.BiometricPrompt → com.kobiton.biometric.BiometricPrompt'],
+                ['5', 'Remove any Toast calls from BiometricPrompt.AuthenticationCallback — they cause a NullPointerException crash during Kobiton sessions.'],
+                ['6', 'Run: eas build --platform android --profile preview'],
+              ].map(([n, text]) => (
+                <View key={n} style={styles.guideStep}>
+                  <View style={[styles.guideStepNum, { backgroundColor: Colors.categoryMeals }]}>
+                    <Text style={styles.guideStepNumText}>{n}</Text>
+                  </View>
+                  <Text style={styles.guideStepText}>{text}</Text>
+                </View>
+              ))}
+
+              <Text style={styles.patchTitle}>What the plugin patches automatically</Text>
+              <View style={styles.codeBlock}>
+                <Text style={styles.codeText}>{`// build.gradle\ndependencies {\n  implementation fileTree(\n    dir: 'libs',\n    include: ['KobitonBiometric.aar']\n  )\n}\n\n// AndroidManifest.xml\n<uses-permission\n  android:name="android.permission\n    .USE_BIOMETRIC"\n  android:requiredFeature="false"/>\n<uses-permission\n  android:name="android.permission\n    .INTERNET"/>\n<application\n  android:usesCleartextTraffic="true"\n  ...>`}</Text>
+              </View>
+
+              <Text style={styles.patchTitle}>Testing via Appium</Text>
+              <View style={styles.codeBlock}>
+                <Text style={styles.codeText}>{`driver.execute(\n  'mobile:biometrics-authenticate',\n  { result: 'passed' }\n)\ndriver.execute(\n  'mobile:biometrics-authenticate',\n  { result: 'failed' }\n)`}</Text>
+              </View>
+            </View>
           </>
         )}
 
@@ -741,6 +791,9 @@ const styles = StyleSheet.create({
   guideCard: { borderLeftWidth: 3, borderLeftColor: Colors.primary },
   iosInjectionCard: { borderLeftWidth: 3, borderLeftColor: Colors.categoryTravel },
   androidGuideCard: { borderLeftWidth: 3, borderLeftColor: Colors.accent },
+  androidBioCard: { borderLeftWidth: 3, borderLeftColor: Colors.categoryMeals },
+  prereqRow: { flexDirection: 'row' as const, alignItems: 'flex-start' as const, gap: 8, marginBottom: 4 },
+  prereqMark: { fontSize: 14, fontFamily: Typography.fontSemiBold, width: 16 },
   patchTitle: {
     fontSize: Typography.sizeSm,
     fontFamily: Typography.fontSemiBold,
