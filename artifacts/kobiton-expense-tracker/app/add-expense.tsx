@@ -23,8 +23,8 @@ import { AppInput } from '@/src/components/AppInput';
 import { AppSelect } from '@/src/components/AppSelect';
 import { ReceiptPicker } from '@/src/components/ReceiptPicker';
 import { TopBar } from '@/src/components/TopBar';
+import { setPendingToast } from '@/src/utils/toastStore';
 import {
-  EXPENSE_HEADS,
   CURRENCIES,
   EXPENSE_CATEGORIES,
   AMOUNT_SLIDER_MAX,
@@ -228,7 +228,7 @@ export default function AddExpenseScreen() {
     setIsSaving(true);
     try {
       const expenseData: NewExpense = {
-        head: data.head as NewExpense['head'],
+        head: data.head,
         amount: parseFloat(data.amount),
         currency: data.currency as NewExpense['currency'],
         date: data.date.toISOString().split('T')[0],
@@ -241,8 +241,10 @@ export default function AddExpenseScreen() {
 
       if (isEditing && params.id) {
         await updateExpense(params.id, expenseData);
+        setPendingToast('Expense updated');
       } else {
         await addExpense(expenseData);
+        setPendingToast('Expense added');
       }
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -276,15 +278,16 @@ export default function AddExpenseScreen() {
             control={control}
             name="head"
             render={({ field }) => (
-              <AppSelect
-                label="Head"
+              <AppInput
+                label="Description"
                 required
-                value={field.value || null}
-                options={EXPENSE_HEADS}
-                onChange={field.onChange}
-                placeholder="Select expense head"
+                value={field.value}
+                onChangeText={field.onChange}
+                placeholder="e.g. Taxi, Hotel, Client Lunch…"
                 error={errors.head?.message}
-                testID="expense-head-select"
+                testID="expense-head-input"
+                autoCapitalize="sentences"
+                returnKeyType="next"
               />
             )}
           />

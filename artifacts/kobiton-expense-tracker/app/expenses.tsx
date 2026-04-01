@@ -12,7 +12,8 @@ import {
   View,
 } from 'react-native';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
+import { takePendingToast } from '@/src/utils/toastStore';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -178,6 +179,15 @@ export default function ExpensesScreen() {
     router.replace('/login');
   }
 
+  function handleDebug() { setShowMenu(false); router.push('/debug'); }
+
+  useFocusEffect(
+    useCallback(() => {
+      const pending = takePendingToast();
+      if (pending) showToast(pending.message, pending.type);
+    }, [])
+  );
+
   function handleVersionTap() {
     versionTapCount.current += 1;
     if (versionTapTimer.current) clearTimeout(versionTapTimer.current);
@@ -251,9 +261,27 @@ export default function ExpensesScreen() {
   const menuActions = showMenu ? (
     <Pressable style={styles.overlay} onPress={() => setShowMenu(false)} testID="menu-overlay">
       <Pressable style={styles.dropdownMenu} onPress={() => {}}>
+        <View style={styles.menuHeader}>
+          <Text style={styles.menuHeaderText}>Menu</Text>
+          <TouchableOpacity
+            onPress={() => setShowMenu(false)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            testID="menu-close-btn"
+            accessibilityLabel="Close menu"
+            accessibilityRole="button"
+          >
+            <Feather name="x" size={18} color={Colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.menuDivider} />
         <TouchableOpacity style={styles.menuItem} onPress={handleGuide} testID="guide-button">
           <Feather name="book-open" size={16} color={Colors.categoryTravel} />
           <Text style={styles.menuItemText}>Feature Guide</Text>
+        </TouchableOpacity>
+        <View style={styles.menuDivider} />
+        <TouchableOpacity style={styles.menuItem} onPress={handleDebug} testID="debug-button">
+          <Feather name="tool" size={16} color={Colors.categoryMisc} />
+          <Text style={styles.menuItemText}>Dev Tools</Text>
         </TouchableOpacity>
         <View style={[styles.menuDivider, { height: 4 }]} />
         <View style={styles.menuGroupLabel}>
@@ -555,6 +583,19 @@ const styles = StyleSheet.create({
     ...Shadow.card,
     minWidth: 190,
     overflow: 'hidden',
+  },
+  menuHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  menuHeaderText: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.textSecondary,
+    letterSpacing: 0.5,
   },
   menuGroupLabel: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4 },
   menuGroupText: {

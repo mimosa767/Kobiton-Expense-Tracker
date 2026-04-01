@@ -1,21 +1,10 @@
-export type ExpenseHead =
-  | 'Taxi'
-  | 'Food'
-  | 'Hotel'
-  | 'Flight'
-  | 'Office Supplies'
-  | 'Client Meeting'
-  | 'Internet'
-  | 'Parking'
-  | 'Other';
-
 export type CurrencyCode = 'INR-₹' | 'USD-$' | 'AUD-A$' | 'SGD-S$' | 'GBP-£' | 'EUR-€' | 'CNY-¥' | 'YEN-¥';
 
 export type ExpenseCategory = 'Business' | 'Travel' | 'Meals' | 'Office' | 'Software' | 'Misc';
 
 export interface Expense {
   id: string;
-  head: ExpenseHead;
+  head: string;
   amount: number;
   currency: CurrencyCode;
   date: string;

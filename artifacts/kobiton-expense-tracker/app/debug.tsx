@@ -197,7 +197,7 @@ export default function DebugScreen() {
               'login-button',
               'signup-button',
               'expenses-add-fab',
-              'expense-head-select',
+              'expense-head-input',
               'expense-amount-input',
               'expense-currency-select',
               'expense-date-picker',

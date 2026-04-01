@@ -1,21 +1,9 @@
-import type { ExpenseHead, CurrencyCode, ExpenseCategory } from '../types/expense';
+import type { CurrencyCode, ExpenseCategory } from '../types/expense';
 
 export const DEMO_CREDENTIALS = {
   email: 'test@kobiton.com',
   password: 'kobiton123',
 };
-
-export const EXPENSE_HEADS: ExpenseHead[] = [
-  'Taxi',
-  'Food',
-  'Hotel',
-  'Flight',
-  'Office Supplies',
-  'Client Meeting',
-  'Internet',
-  'Parking',
-  'Other',
-];
 
 export const CURRENCIES: CurrencyCode[] = [
   'INR-₹',
