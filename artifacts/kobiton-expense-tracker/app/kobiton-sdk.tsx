@@ -388,6 +388,41 @@ export default function KobitonSDKScreen() {
               </View>
             </View>
 
+            {/* iOS Biometric SDK Guide */}
+            <View style={[styles.card, styles.iosBioCard]}>
+              <View style={styles.guideHeader}>
+                <Feather name="shield" size={16} color={Colors.categoryOffice} />
+                <Text style={[styles.guideTitle, { color: Colors.categoryOffice }]}>iOS Biometric SDK</Text>
+              </View>
+              <Text style={styles.guideBody}>
+                KobitonLAContext.framework is a drop-in replacement for Apple's LocalAuthentication framework. It intercepts LAContext calls so the Kobiton platform can remotely inject biometric pass or fail results during test sessions — no app logic changes required.
+              </Text>
+              {[
+                ['1', 'Download KobitonLAContext.zip from the Kobiton portal:\nportal.kobiton.com → Settings → Biometric SDK'],
+                ['2', 'Extract the zip — you will get KobitonLAContext.framework.'],
+                ['3', 'Move KobitonLAContext.framework into ios/KobitonFrameworks/ (created automatically after expo prebuild).'],
+                ['4', 'Open ios/*.xcworkspace in Xcode → select project → General tab → Frameworks, Libraries, Embedded Content → click + → Add Other… → Add Files… → select KobitonLAContext.framework → click Add.'],
+                ['5', 'In the Embed dropdown next to KobitonLAContext.framework, select "Embed & Sign".'],
+                ['6', 'If your app has custom Swift code using LocalAuthentication: see KOBITON_LACONTEXT_PATCH.md in ios/ for import replacements. (Expo managed apps using expo-local-authentication need no Swift changes.)'],
+                ['7', 'Run: eas build --platform ios --profile preview'],
+              ].map(([n, text]) => (
+                <View key={n} style={styles.guideStep}>
+                  <View style={[styles.guideStepNum, { backgroundColor: Colors.categoryOffice }]}>
+                    <Text style={styles.guideStepNumText}>{n}</Text>
+                  </View>
+                  <Text style={styles.guideStepText}>{text}</Text>
+                </View>
+              ))}
+              <Text style={styles.patchTitle}>What the plugin handles automatically</Text>
+              <View style={styles.codeBlock}>
+                <Text style={styles.codeText}>{`// Xcode build settings\nFRAMEWORK_SEARCH_PATHS =\n  "$(PROJECT_DIR)/KobitonFrameworks"\n  $(inherited)\n\n// Info.plist\nNSAppTransportSecurity = {\n  NSAllowsArbitraryLoads = YES\n}\n// (required for iOS 14 and earlier)\nNSFaceIDUsageDescription = "..."\nKobitonBiometricEnabled = true`}</Text>
+              </View>
+              <Text style={styles.patchTitle}>Swift import replacements (custom modules only)</Text>
+              <View style={styles.codeBlock}>
+                <Text style={styles.codeText}>{`// Replace:\nimport LocalAuthentication\n  → import KobitonLAContext\n\nvar context = LAContext()\n  → var context = KobitonLAContext()`}</Text>
+              </View>
+            </View>
+
             {/* iOS Image Injection Guide */}
             <View style={[styles.card, styles.iosInjectionCard]}>
               <View style={styles.guideHeader}>
@@ -789,6 +824,7 @@ const styles = StyleSheet.create({
   instrBtnText: { fontSize: Typography.sizeSm, fontFamily: Typography.fontMedium, color: Colors.textPrimary },
 
   guideCard: { borderLeftWidth: 3, borderLeftColor: Colors.primary },
+  iosBioCard: { borderLeftWidth: 3, borderLeftColor: Colors.categoryOffice },
   iosInjectionCard: { borderLeftWidth: 3, borderLeftColor: Colors.categoryTravel },
   androidGuideCard: { borderLeftWidth: 3, borderLeftColor: Colors.accent },
   androidBioCard: { borderLeftWidth: 3, borderLeftColor: Colors.categoryMeals },

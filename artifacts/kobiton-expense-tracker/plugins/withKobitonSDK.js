@@ -108,6 +108,17 @@ function withKobitonInfoPlist(config, options) {
         'Kobiton Expense Tracker uses the camera to capture receipts and supports Kobiton image injection for automated testing.';
     }
 
+    // Required for Kobiton Biometric SDK on iOS 14 and earlier:
+    // App Transport Security must allow arbitrary loads so the SDK can
+    // communicate with the Kobiton platform over the test session network.
+    if (options.biometricSupport) {
+      if (!plist.NSAppTransportSecurity) {
+        plist.NSAppTransportSecurity = { NSAllowsArbitraryLoads: true };
+      } else if (!plist.NSAppTransportSecurity.NSAllowsArbitraryLoads) {
+        plist.NSAppTransportSecurity.NSAllowsArbitraryLoads = true;
+      }
+    }
+
     return mod;
   });
 }
@@ -378,6 +389,219 @@ function withKobitonIosImageInjection(config, options) {
 
     return mod;
   });
+
+  return config;
+}
+
+// ─── iOS: Biometric SDK ──────────────────────────────────────────────────────
+
+/**
+ * iOS Biometric SDK integration.
+ *
+ * Based on: https://docs.kobiton.com/apps/biometric-authentication-sdk/add-the-sdk-to-your-ios-app
+ *
+ * The KobitonLAContext.framework is a drop-in replacement for Apple's
+ * LocalAuthentication framework. When present and linked, it intercepts all
+ * LAContext calls so the Kobiton platform can inject biometric pass/fail results
+ * remotely during test sessions — no app logic needs to change.
+ *
+ * What this automates:
+ *   1. Creates ios/KobitonFrameworks/ directory (shared with image injection SDK)
+ *   2. Writes ios/KobitonFrameworks/KOBITON_LACONTEXT_README.txt with setup guide
+ *   3. Writes ios/KOBITON_LACONTEXT_PATCH.md with Swift import replacement guide
+ *   4. Adds FRAMEWORK_SEARCH_PATHS to the Xcode project (skipped if imageInjectionSupport
+ *      is also enabled — that already adds the same path)
+ *   5. Adds NSAppTransportSecurity → NSAllowsArbitraryLoads to Info.plist
+ *      (handled in withKobitonInfoPlist — required for iOS 14 and earlier support)
+ *
+ * What you must do manually (one-time after expo prebuild):
+ *   1. Download KobitonLAContext.zip from the Kobiton portal
+ *   2. Extract to get KobitonLAContext.framework
+ *   3. Place in ios/KobitonFrameworks/KobitonLAContext.framework
+ *   4. In Xcode: General → Frameworks, Libraries, Embedded Content
+ *      → + → Add Other → Add Files → KobitonLAContext.framework → Embed & Sign
+ *   5. If you have custom Swift files using LocalAuthentication:
+ *      replace imports and class references — see KOBITON_LACONTEXT_PATCH.md
+ *   6. Build: eas build --platform ios --profile preview
+ */
+function withKobitonIosBiometric(config, options) {
+  if (!options.biometricSupport) return config;
+
+  // Step 1: Create directory, README, and Swift import replacement guide
+  config = withDangerousMod(config, [
+    'ios',
+    async (mod) => {
+      const projectRoot = mod.modRequest.projectRoot;
+
+      // Shared KobitonFrameworks directory (also used by iOS image injection)
+      const frameworksDir = path.join(projectRoot, 'ios', 'KobitonFrameworks');
+      if (!fs.existsSync(frameworksDir)) {
+        fs.mkdirSync(frameworksDir, { recursive: true });
+      }
+
+      const readmeContent = [
+        'Kobiton Biometric Authentication SDK for iOS (KobitonLAContext)',
+        '================================================================',
+        '',
+        'Reference: https://docs.kobiton.com/apps/biometric-authentication-sdk/add-the-sdk-to-your-ios-app',
+        '',
+        'WHAT IT DOES',
+        '------------',
+        'KobitonLAContext.framework is a drop-in replacement for Apple\'s LocalAuthentication',
+        'framework. It intercepts all LAContext calls so the Kobiton platform can inject',
+        'biometric pass/fail results remotely during test sessions.',
+        '',
+        'SETUP',
+        '-----',
+        '',
+        '1. Download KobitonLAContext.zip from the Kobiton portal:',
+        '   portal.kobiton.com → Settings → Biometric SDK',
+        '',
+        '2. Extract KobitonLAContext.zip — you will get KobitonLAContext.framework.',
+        '',
+        '3. Move KobitonLAContext.framework into THIS directory:',
+        `   ${frameworksDir}/KobitonLAContext.framework`,
+        '',
+        '4. Open ios/*.xcworkspace in Xcode (NOT .xcodeproj).',
+        '',
+        '5. Select your project → General tab →',
+        '   Frameworks, Libraries, and Embedded Content → click +',
+        '   → Add Other… → Add Files… → select KobitonLAContext.framework → click Add.',
+        '',
+        '6. In the Embed dropdown next to KobitonLAContext.framework, select "Embed & Sign".',
+        '',
+        '7. If you have custom Swift files that import LocalAuthentication:',
+        '   See KOBITON_LACONTEXT_PATCH.md in ios/ for the import replacement guide.',
+        '   (For Expo managed apps using expo-local-authentication, no Swift changes',
+        '    are needed — the framework intercepts LAContext at the OS level.)',
+        '',
+        '8. Build: eas build --platform ios --profile preview',
+        '',
+        'WHAT THE PLUGIN HANDLES AUTOMATICALLY',
+        '--------------------------------------',
+        '  • FRAMEWORK_SEARCH_PATHS = $(PROJECT_DIR)/KobitonFrameworks $(inherited)',
+        '  • NSAppTransportSecurity → NSAllowsArbitraryLoads = YES in Info.plist',
+        '    (required for iOS 14 and earlier support)',
+        '  • NSFaceIDUsageDescription in Info.plist',
+        '  • KobitonBiometricEnabled = true in Info.plist',
+        '  • KobitonLAContext initialization in AppDelegate',
+        '',
+        'TESTING',
+        '-------',
+        '  driver.execute(\'mobile:biometrics-authenticate\', {\'result\': \'passed\'})',
+        '  driver.execute(\'mobile:biometrics-authenticate\', {\'result\': \'failed\'})',
+      ].join('\n');
+
+      fs.writeFileSync(
+        path.join(frameworksDir, 'KOBITON_LACONTEXT_README.txt'),
+        readmeContent,
+        'utf8'
+      );
+
+      // Swift import replacement guide (for apps with custom native Swift code)
+      const patchContent = [
+        '# Kobiton Biometric SDK – Swift Import Replacement Guide',
+        '',
+        'Reference: https://docs.kobiton.com/apps/biometric-authentication-sdk/add-the-sdk-to-your-ios-app',
+        '',
+        '## When is this needed?',
+        '',
+        'For Expo managed apps using expo-local-authentication, the KobitonLAContext',
+        'framework intercepts LAContext calls at the OS level — NO Swift changes needed.',
+        '',
+        'If you have custom native Swift modules that directly import LocalAuthentication,',
+        'apply the replacements below.',
+        '',
+        '## Find & Replace Table',
+        '',
+        '| Replace | With |',
+        '|---|---|',
+        '| `import LocalAuthentication` | `import KobitonLAContext` |',
+        '| `context = LAContext()` | `context = KobitonLAContext()` |',
+        '| `var context = LAContext()` | `var context = KobitonLAContext()` |',
+        '| `let context = LAContext()` | `let context = KobitonLAContext()` |',
+        '',
+        '## Example',
+        '',
+        '### Before:',
+        '```swift',
+        'import UIKit',
+        'import LocalAuthentication',
+        '',
+        'class ViewController: UIViewController {',
+        '    var context = LAContext()',
+        '    // ...',
+        '}',
+        '```',
+        '',
+        '### After:',
+        '```swift',
+        'import UIKit',
+        'import KobitonLAContext',
+        '',
+        'class ViewController: UIViewController {',
+        '    var context = KobitonLAContext()',
+        '    // ...',
+        '}',
+        '```',
+        '',
+        '## Info.plist (handled automatically by plugin)',
+        '',
+        '```xml',
+        '<!-- NSAppTransportSecurity — allows SDK to reach Kobiton platform -->',
+        '<!-- Required for iOS 14 and earlier support -->',
+        '<key>NSAppTransportSecurity</key>',
+        '<dict>',
+        '  <key>NSAllowsArbitraryLoads</key>',
+        '  <true/>',
+        '</dict>',
+        '',
+        '<!-- Face ID usage description -->',
+        '<key>NSFaceIDUsageDescription</key>',
+        '<string>Kobiton Expense Tracker uses Face ID to authenticate you securely.</string>',
+        '```',
+      ].join('\n');
+
+      fs.writeFileSync(
+        path.join(projectRoot, 'ios', 'KOBITON_LACONTEXT_PATCH.md'),
+        patchContent,
+        'utf8'
+      );
+
+      return mod;
+    },
+  ]);
+
+  // Step 2: Add FRAMEWORK_SEARCH_PATHS for KobitonLAContext.framework.
+  // Only needed when imageInjectionSupport is NOT also enabled, because that
+  // plugin already adds "$(PROJECT_DIR)/KobitonFrameworks" to all build configs.
+  if (!options.imageInjectionSupport) {
+    config = withXcodeProject(config, (mod) => {
+      const xcodeProject = mod.modResults;
+      const buildConfigurations = xcodeProject.pbxXCBuildConfigurationSection();
+      const kobitonPath = '"$(PROJECT_DIR)/KobitonFrameworks"';
+
+      Object.values(buildConfigurations).forEach((buildConfig) => {
+        if (typeof buildConfig !== 'object' || !buildConfig.buildSettings) return;
+        const settings = buildConfig.buildSettings;
+        const current = settings.FRAMEWORK_SEARCH_PATHS;
+
+        if (!current) {
+          settings.FRAMEWORK_SEARCH_PATHS = [kobitonPath, '"$(inherited)"'];
+        } else if (typeof current === 'string') {
+          if (!current.includes('KobitonFrameworks')) {
+            settings.FRAMEWORK_SEARCH_PATHS = [current, kobitonPath];
+          }
+        } else if (Array.isArray(current)) {
+          if (!current.some((p) => typeof p === 'string' && p.includes('KobitonFrameworks'))) {
+            current.push(kobitonPath);
+          }
+        }
+      });
+
+      return mod;
+    });
+  }
 
   return config;
 }
@@ -766,9 +990,10 @@ const withKobitonSDK = (config, options = {}) => {
     config = withKobitonAndroidImageInjection(config, options);
   }
   if (options.biometricSupport) {
+    config = withKobitonIosBiometric(config, options);
     config = withKobitonAndroidBiometric(config, options);
   }
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.2.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.3.0');
