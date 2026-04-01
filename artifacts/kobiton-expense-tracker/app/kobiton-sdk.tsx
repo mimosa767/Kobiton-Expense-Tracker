@@ -388,6 +388,40 @@ export default function KobitonSDKScreen() {
               </View>
             </View>
 
+            {/* iOS Image Injection Guide */}
+            <View style={[styles.card, styles.iosInjectionCard]}>
+              <View style={styles.guideHeader}>
+                <Feather name="camera" size={16} color={Colors.categoryTravel} />
+                <Text style={[styles.guideTitle, { color: Colors.categoryTravel }]}>iOS Image Injection SDK</Text>
+              </View>
+              <Text style={styles.guideBody}>
+                Kobiton's KobitonSdk.framework intercepts the iOS camera stack so the platform can inject custom images or video frames into the camera feed during test sessions — no app camera logic needs to change.
+              </Text>
+              {[
+                ['1', 'Download KobitonSDK-ios.zip from Kobiton:\nhttps://kobiton.s3.amazonaws.com/downloads/KobitonSDK-ios.zip'],
+                ['2', 'Extract the zip — you will get a folder named KobitonSdk.framework.'],
+                ['3', 'Move KobitonSdk.framework into ios/KobitonFrameworks/ (created automatically by this Expo plugin after expo prebuild).'],
+                ['4', 'Open ios/*.xcworkspace in Xcode. Drag KobitonSdk.framework from ios/KobitonFrameworks/ into your Xcode project tree. In the popup: check "Copy items if needed", select your app target, click Finish.'],
+                ['5', 'Xcode → Project Navigator → select top project → General tab → Frameworks, Libraries, and Embedded Content. Confirm KobitonSdk.framework is listed, then set the Embed dropdown to "Embed & Sign".'],
+                ['6', 'Run: eas build --platform ios --profile preview'],
+              ].map(([n, text]) => (
+                <View key={n} style={styles.guideStep}>
+                  <View style={[styles.guideStepNum, { backgroundColor: Colors.categoryTravel }]}>
+                    <Text style={styles.guideStepNumText}>{n}</Text>
+                  </View>
+                  <Text style={styles.guideStepText}>{text}</Text>
+                </View>
+              ))}
+              <Text style={styles.patchTitle}>What the plugin handles automatically</Text>
+              <View style={styles.codeBlock}>
+                <Text style={styles.codeText}>{`// Xcode build settings (all configs)\nFRAMEWORK_SEARCH_PATHS =\n  "$(PROJECT_DIR)/KobitonFrameworks"\n  $(inherited)\n\n// Info.plist\nKobitonImageInjectionEnabled = true\nNSCameraUsageDescription = "..."`}</Text>
+              </View>
+              <Text style={styles.patchTitle}>Validate your setup</Text>
+              <View style={styles.codeBlock}>
+                <Text style={styles.codeText}>{`# After expo prebuild, run:\nbash scripts/setup-kobiton-ios.sh\n# Checks framework location and\n# prints remaining Xcode steps`}</Text>
+              </View>
+            </View>
+
             {/* Android Image Injection Guide */}
             <View style={[styles.card, styles.androidGuideCard]}>
               <View style={styles.guideHeader}>
@@ -705,6 +739,7 @@ const styles = StyleSheet.create({
   instrBtnText: { fontSize: Typography.sizeSm, fontFamily: Typography.fontMedium, color: Colors.textPrimary },
 
   guideCard: { borderLeftWidth: 3, borderLeftColor: Colors.primary },
+  iosInjectionCard: { borderLeftWidth: 3, borderLeftColor: Colors.categoryTravel },
   androidGuideCard: { borderLeftWidth: 3, borderLeftColor: Colors.accent },
   patchTitle: {
     fontSize: Typography.sizeSm,
