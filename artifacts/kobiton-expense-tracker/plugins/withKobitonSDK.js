@@ -35,9 +35,9 @@
  *   ]
  *
  * iOS Image Injection:
- *   Requires KobitonSdk.framework placed in ios/KobitonFrameworks/.
- *   Download: https://kobiton.s3.amazonaws.com/downloads/KobitonSDK-ios.zip
- *   The plugin patches FRAMEWORK_SEARCH_PATHS automatically.
+ *   KobitonSdk.framework is bundled in sdk-files/ios/KobitonSdk.framework/.
+ *   The plugin auto-copies it to ios/KobitonFrameworks/ during expo prebuild.
+ *   The plugin also patches FRAMEWORK_SEARCH_PATHS automatically.
  *   You must still add the framework with "Embed & Sign" in Xcode — see
  *   the README in ios/KobitonFrameworks/ or run scripts/setup-kobiton-ios.sh.
  *
@@ -195,7 +195,7 @@ function withKobitonAppDelegate(config, options) {
 function withKobitonIosImageInjection(config, options) {
   if (!options.imageInjectionSupport) return config;
 
-  // Step 1: Create ios/KobitonFrameworks/ directory, README, and setup script
+  // Step 1: Create ios/KobitonFrameworks/ directory, auto-copy SDK if staged, README, and setup script
   config = withDangerousMod(config, [
     'ios',
     async (mod) => {
@@ -207,46 +207,58 @@ function withKobitonIosImageInjection(config, options) {
         fs.mkdirSync(frameworksDir, { recursive: true });
       }
 
+      // Auto-copy KobitonSdk.framework from sdk-files/ios/ if it has been staged there
+      const stagedFramework = path.join(projectRoot, 'sdk-files', 'ios', 'KobitonSdk.framework');
+      const targetFramework = path.join(frameworksDir, 'KobitonSdk.framework');
+      if (fs.existsSync(stagedFramework)) {
+        if (!fs.existsSync(targetFramework)) {
+          fs.cpSync(stagedFramework, targetFramework, { recursive: true });
+          console.log('[KobitonSDK] ✓ Auto-copied KobitonSdk.framework from sdk-files/ios/ → ios/KobitonFrameworks/');
+        } else {
+          console.log('[KobitonSDK] ✓ KobitonSdk.framework already present in ios/KobitonFrameworks/ — skipping copy.');
+        }
+      } else {
+        console.warn('[KobitonSDK] ⚠ KobitonSdk.framework not found in sdk-files/ios/. Place the framework there before running expo prebuild, or copy it manually to ios/KobitonFrameworks/KobitonSdk.framework.');
+      }
+
       // Write setup README
       const readmeContent = [
         'Kobiton Image Injection SDK for iOS',
         '=====================================',
         '',
-        'Place KobitonSdk.framework in this directory (ios/KobitonFrameworks/).',
+        'KobitonSdk.framework is automatically copied here from sdk-files/ios/',
+        'during expo prebuild — no manual download or file placement needed.',
         '',
         'STEP-BY-STEP SETUP',
         '------------------',
         '',
-        '1. Download the SDK:',
-        '   https://kobiton.s3.amazonaws.com/downloads/KobitonSDK-ios.zip',
-        '   (The downloaded file name should be: KobitonSDK-ios.zip)',
+        '1. Run expo prebuild:',
+        '   npx expo prebuild --clean',
+        '   → The plugin auto-copies KobitonSdk.framework from sdk-files/ios/',
+        `   → Target: ${frameworksDir}/KobitonSdk.framework`,
         '',
-        '2. Extract KobitonSDK-ios.zip to get KobitonSdk.framework',
+        '2. Open ios/*.xcworkspace in Xcode (NOT .xcodeproj)',
         '',
-        '3. Move KobitonSdk.framework into THIS directory:',
-        `   ${frameworksDir}/KobitonSdk.framework`,
-        '',
-        '4. Open ios/*.xcworkspace in Xcode (NOT .xcodeproj)',
-        '',
-        '5. Drag KobitonSdk.framework from this folder into your Xcode project tree',
+        '3. Drag KobitonSdk.framework from this folder into your Xcode project tree',
         '   In the popup:',
         '     • Check "Copy items if needed"',
         '     • Select your app target',
         '     • Click Finish',
         '',
-        '6. In Xcode: select the top project name → General tab',
+        '4. In Xcode: select the top project name → General tab',
         '   Under "Frameworks, Libraries, and Embedded Content":',
         '     • Confirm KobitonSdk.framework is listed',
         '     • Set the Embed dropdown to "Embed & Sign"',
         '',
-        '7. The Expo config plugin has already added FRAMEWORK_SEARCH_PATHS',
+        '5. The Expo config plugin has already added FRAMEWORK_SEARCH_PATHS',
         '   pointing to this directory, so the linker will find the framework.',
         '',
-        '8. Build and export:',
+        '6. Build and export:',
         '   eas build --platform ios --profile preview',
         '',
         'WHAT THE PLUGIN HANDLES AUTOMATICALLY',
         '--------------------------------------',
+        '  • Copies KobitonSdk.framework from sdk-files/ios/ during prebuild',
         '  • FRAMEWORK_SEARCH_PATHS = $(PROJECT_DIR)/KobitonFrameworks $(inherited)',
         '  • NSCameraUsageDescription in Info.plist',
         '  • KobitonImageInjectionEnabled = true in Info.plist',

@@ -430,15 +430,14 @@ export default function KobitonSDKScreen() {
                 <Text style={[styles.guideTitle, { color: Colors.categoryTravel }]}>iOS Image Injection SDK</Text>
               </View>
               <Text style={styles.guideBody}>
-                Kobiton's KobitonSdk.framework intercepts the iOS camera stack so the platform can inject custom images or video frames into the camera feed during test sessions — no app camera logic needs to change.
+                Kobiton's KobitonSdk.framework intercepts the iOS camera stack so the platform can inject custom images or video frames into the camera feed during test sessions — no app camera logic needs to change. The framework is already bundled in this repo (sdk-files/ios/) and is auto-copied during expo prebuild.
               </Text>
               {[
-                ['1', 'Download KobitonSDK-ios.zip from Kobiton:\nhttps://kobiton.s3.amazonaws.com/downloads/KobitonSDK-ios.zip'],
-                ['2', 'Extract the zip — you will get a folder named KobitonSdk.framework.'],
-                ['3', 'Move KobitonSdk.framework into ios/KobitonFrameworks/ (created automatically by this Expo plugin after expo prebuild).'],
-                ['4', 'Open ios/*.xcworkspace in Xcode. Drag KobitonSdk.framework from ios/KobitonFrameworks/ into your Xcode project tree. In the popup: check "Copy items if needed", select your app target, click Finish.'],
-                ['5', 'Xcode → Project Navigator → select top project → General tab → Frameworks, Libraries, and Embedded Content. Confirm KobitonSdk.framework is listed, then set the Embed dropdown to "Embed & Sign".'],
-                ['6', 'Run: eas build --platform ios --profile preview'],
+                ['1', 'KobitonSdk.framework is already included in sdk-files/ios/ — no download needed.'],
+                ['2', 'Run: npx expo prebuild --clean\nThe plugin auto-copies KobitonSdk.framework → ios/KobitonFrameworks/'],
+                ['3', 'Open ios/*.xcworkspace in Xcode. Drag KobitonSdk.framework from ios/KobitonFrameworks/ into your Xcode project tree. In the popup: check "Copy items if needed", select your app target, click Finish.'],
+                ['4', 'Xcode → Project Navigator → select top project → General tab → Frameworks, Libraries, and Embedded Content. Confirm KobitonSdk.framework is listed, then set the Embed dropdown to "Embed & Sign".'],
+                ['5', 'Run: eas build --platform ios --profile preview'],
               ].map(([n, text]) => (
                 <View key={n} style={styles.guideStep}>
                   <View style={[styles.guideStepNum, { backgroundColor: Colors.categoryTravel }]}>
