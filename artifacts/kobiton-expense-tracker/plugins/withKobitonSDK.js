@@ -51,7 +51,8 @@
  * Biometric SDK:
  *   iOS  — KobitonLAContext.framework is bundled in sdk-files/ios/KobitonLAContext.framework/.
  *          The plugin auto-copies it to ios/KobitonFrameworks/ during expo prebuild.
- *   Android — KobitonBiometric.aar wraps BiometricPrompt for the same effect.
+ *   Android — KobitonBiometric.aar is bundled in sdk-files/android/KobitonBiometric.aar.
+ *             The plugin auto-copies it to android/app/libs/ during expo prebuild.
  *
  * Build with EAS:
  *   eas build --platform ios --profile preview
@@ -861,11 +862,28 @@ function withKobitonAndroidBiometric(config, options) {
       const libsDir = path.join(projectRoot, 'android', 'app', 'libs');
       if (!fs.existsSync(libsDir)) fs.mkdirSync(libsDir, { recursive: true });
 
+      // Auto-copy KobitonBiometric.aar from sdk-files/android/ if staged there
+      const stagedAar = path.join(projectRoot, 'sdk-files', 'android', 'KobitonBiometric.aar');
+      const targetAar = path.join(libsDir, 'KobitonBiometric.aar');
+      if (fs.existsSync(stagedAar)) {
+        if (!fs.existsSync(targetAar)) {
+          fs.copyFileSync(stagedAar, targetAar);
+          console.log('[KobitonSDK] ✓ Auto-copied KobitonBiometric.aar from sdk-files/android/ → android/app/libs/');
+        } else {
+          console.log('[KobitonSDK] ✓ KobitonBiometric.aar already present in android/app/libs/ — skipping copy.');
+        }
+      } else {
+        console.warn('[KobitonSDK] ⚠ KobitonBiometric.aar not found in sdk-files/android/. Place it there before running expo prebuild, or copy it manually to android/app/libs/KobitonBiometric.aar.');
+      }
+
       const readmeContent = [
         'Kobiton Biometric Authentication SDK for Android',
         '=================================================',
         '',
         'Reference: https://docs.kobiton.com/apps/biometric-authentication-sdk/add-the-sdk-to-your-android-app',
+        '',
+        'KobitonBiometric.aar is automatically copied here from sdk-files/android/',
+        'during expo prebuild — no manual download or file placement needed.',
         '',
         'PREREQUISITES — your app must meet ALL of the following:',
         '  ✓  Targets Android 9 (API 28) or later ONLY',
@@ -876,23 +894,23 @@ function withKobitonAndroidBiometric(config, options) {
         'SETUP',
         '-----',
         '',
-        '1. Download KobitonBiometric.aar:',
-        '   Contact Kobiton support or portal.kobiton.com → Settings → Biometric SDK',
+        '1. Run expo prebuild:',
+        '   npx expo prebuild --clean',
+        '   → The plugin auto-copies KobitonBiometric.aar from sdk-files/android/',
+        `   → Target: ${targetAar}`,
         '',
-        '2. Place KobitonBiometric.aar in this directory (android/app/libs/)',
-        '',
-        '3. The withKobitonSDK config plugin automatically patches:',
+        '2. The withKobitonSDK config plugin automatically patches:',
         '   a) build.gradle — adds fileTree dependency for KobitonBiometric.aar',
         '   b) AndroidManifest.xml — adds USE_BIOMETRIC permission, INTERNET permission,',
         '      and usesCleartextTraffic="true" on <application>',
         '',
-        '4. Replace BiometricManager and BiometricPrompt class references.',
+        '3. Replace BiometricManager and BiometricPrompt class references.',
         '   See KOBITON_BIOMETRIC_PATCH.md in android/ for a full find-and-replace table.',
         '',
-        '5. Remove any Toast calls from BiometricPrompt.AuthenticationCallback.',
+        '4. Remove any Toast calls from BiometricPrompt.AuthenticationCallback.',
         '   (Known issue: Toast in auth callbacks causes NullPointerException in Kobiton sessions)',
         '',
-        '6. Rebuild: eas build --platform android --profile preview',
+        '5. Rebuild: eas build --platform android --profile preview',
         '',
         'TESTING',
         '-------',

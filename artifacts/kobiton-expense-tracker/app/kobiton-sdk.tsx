@@ -496,7 +496,7 @@ export default function KobitonSDKScreen() {
                 <Text style={[styles.guideTitle, { color: Colors.categoryMeals }]}>Android Biometric SDK</Text>
               </View>
               <Text style={styles.guideBody}>
-                KobitonBiometric.aar wraps Android's BiometricPrompt so the Kobiton platform can remotely inject pass or fail signals into the biometric prompt during test sessions.
+                KobitonBiometric.aar wraps Android's BiometricPrompt so the Kobiton platform can remotely inject pass or fail signals into the biometric prompt during test sessions. The .aar is already bundled in this repo (sdk-files/android/) and is auto-copied during expo prebuild.
               </Text>
 
               <Text style={styles.patchTitle}>Prerequisites (must all be met)</Text>
@@ -513,9 +513,9 @@ export default function KobitonSDKScreen() {
               ))}
 
               {[
-                ['1', 'Download KobitonBiometric.aar from the Kobiton portal:\nportal.kobiton.com → Settings → Biometric SDK'],
-                ['2', 'Place KobitonBiometric.aar in android/app/libs/ (created automatically after expo prebuild).'],
-                ['3', 'Set biometricSupport: true in app.json. The plugin then patches build.gradle, AndroidManifest.xml, and writes KOBITON_BIOMETRIC_PATCH.md.'],
+                ['1', 'KobitonBiometric.aar is already included in sdk-files/android/ — no download needed.'],
+                ['2', 'Run: npx expo prebuild --clean\nThe plugin auto-copies KobitonBiometric.aar → android/app/libs/'],
+                ['3', 'The plugin also patches build.gradle, AndroidManifest.xml, and writes KOBITON_BIOMETRIC_PATCH.md.'],
                 ['4', 'Replace class references — see KOBITON_BIOMETRIC_PATCH.md in android/:\n• *.BiometricManager → com.kobiton.biometric.BiometricManager\n• *.BiometricPrompt → com.kobiton.biometric.BiometricPrompt'],
                 ['5', 'Remove any Toast calls from BiometricPrompt.AuthenticationCallback — they cause a NullPointerException crash during Kobiton sessions.'],
                 ['6', 'Run: eas build --platform android --profile preview'],
