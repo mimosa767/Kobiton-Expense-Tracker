@@ -1062,7 +1062,7 @@ function withKobitonAndroidBiometric(config, options) {
 function withKobitonAndroidBiometricNativeModule(config, options) {
   if (!options.biometricSupport) return config;
 
-  return withDangerousMod(config, [
+  config = withDangerousMod(config, [
     'android',
     async (mod) => {
       const projectRoot = mod.modRequest.projectRoot;
@@ -1230,6 +1230,22 @@ class KobitonBiometricPackage : ReactPackage {
       return mod;
     },
   ]);
+
+  // Add androidx.biometric so the generated KobitonBiometricModule.kt can resolve
+  // BiometricManager and BiometricPrompt at compile time.
+  // KobitonBiometric.aar extends these classes — it does not bundle them.
+  config = withAppBuildGradle(config, (mod) => {
+    const marker = 'androidx.biometric:biometric:';
+    if (!mod.modResults.contents.includes(marker)) {
+      mod.modResults.contents = mod.modResults.contents.replace(
+        /dependencies\s*\{/,
+        `dependencies {\n    // Required for KobitonBiometricModule.kt (BiometricManager + BiometricPrompt)\n    implementation 'androidx.biometric:biometric:1.1.0'`
+      );
+    }
+    return mod;
+  });
+
+  return config;
 }
 
 // ─── iOS: Biometric Native Module ─────────────────────────────────────────────
