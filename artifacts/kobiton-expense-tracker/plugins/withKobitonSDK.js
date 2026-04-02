@@ -1184,12 +1184,14 @@ const withKobitonSDK = (config, options = {}) => {
     config = withKobitonAndroidBiometricNativeModule(config, options);
   }
 
-  // Link KobitonBiometric.aar directly — it contains the compiled biometric interception code.
+  // Link KobitonBiometric.aar from android/app/libs/ where withKobitonAndroidBiometric
+  // auto-copies it during prebuild. The path is relative to the app module directory
+  // (android/app/), so 'libs/KobitonBiometric.aar' resolves correctly.
   config = withAppBuildGradle(config, (config) => {
     if (!config.modResults.contents.includes('KobitonBiometric.aar')) {
       config.modResults.contents = config.modResults.contents.replace(
         /dependencies\s*\{/,
-        `dependencies {\n    implementation files('../sdk-files/android/KobitonBiometric.aar')`
+        `dependencies {\n    implementation files('libs/KobitonBiometric.aar')`
       );
     }
     return config;
@@ -1198,4 +1200,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.7.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.8.0');
