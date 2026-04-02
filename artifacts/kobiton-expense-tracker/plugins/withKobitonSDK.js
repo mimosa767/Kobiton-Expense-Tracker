@@ -1000,23 +1000,7 @@ function withKobitonAndroidBiometric(config, options) {
     },
   ]);
 
-  // Step 2: Patch build.gradle — only needed if image injection isn't already patching it
-  // Image injection uses '*.aar' wildcard which covers KobitonBiometric.aar too.
-  // For biometric-only builds we add a specific KobitonBiometric.aar entry.
-  if (!options.imageInjectionSupport) {
-    config = withAppBuildGradle(config, (mod) => {
-      const contents = mod.modResults.contents;
-      if (!contents.includes("fileTree(dir: 'libs'")) {
-        mod.modResults.contents = contents.replace(
-          /dependencies\s*\{/,
-          `dependencies {\n    // Kobiton Biometric SDK\n    implementation fileTree(dir: 'libs', include: ['KobitonBiometric.aar'])`
-        );
-      }
-      return mod;
-    });
-  }
-
-  // Step 3: Patch AndroidManifest.xml with biometric-specific requirements
+  // Step 2: Patch AndroidManifest.xml with biometric-specific requirements
   config = withAndroidManifest(config, (mod) => {
     const manifest = mod.modResults.manifest;
 
@@ -1056,11 +1040,9 @@ function withKobitonAndroidBiometric(config, options) {
  * The AAR contains Kobiton's compiled biometric interception code; no custom
  * native module generation is required.
  */
-function withKobitonAndroidBiometricNativeModule(config, options) {
-  if (!options.biometricSupport) return config;
-
-  // KobitonBiometric.aar already contains the compiled biometric interception code.
-  // No custom native module generation is needed — the AAR is linked directly.
+function withKobitonAndroidBiometricNativeModule(config, _options) {
+  // No-op: KobitonBiometric.aar is linked via implementation files() in the main
+  // withKobitonSDK function. No Kotlin files are generated.
   return config;
 }
 
@@ -1216,4 +1198,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.6.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.7.0');
