@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "WTN5-K26nUX3ebrKJfycJ"
+uri = "file://artifacts/kobiton-expense-tracker/KOBITON_BUILD_FIXES.md"
+type = "text"
+title = "Kobiton Android Build — Fix Log"
