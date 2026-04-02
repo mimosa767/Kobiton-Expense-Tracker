@@ -15,6 +15,7 @@
     },
     "ios": {
       "supportsTablet": false,
+      "bundleIdentifier": "com.kobiton.expensetracker",
       "infoPlist": {
         "NSCameraUsageDescription": "Allow Kobiton Expense Tracker to capture receipt photos.",
         "NSPhotoLibraryUsageDescription": "Allow Kobiton Expense Tracker to select receipt images from your library.",
@@ -22,6 +23,7 @@
       }
     },
     "android": {
+      "package": "com.kobiton.expensetracker",
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
