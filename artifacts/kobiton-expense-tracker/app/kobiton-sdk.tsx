@@ -395,16 +395,15 @@ export default function KobitonSDKScreen() {
                 <Text style={[styles.guideTitle, { color: Colors.categoryOffice }]}>iOS Biometric SDK</Text>
               </View>
               <Text style={styles.guideBody}>
-                KobitonLAContext.framework is a drop-in replacement for Apple's LocalAuthentication framework. It intercepts LAContext calls so the Kobiton platform can remotely inject biometric pass or fail results during test sessions — no app logic changes required.
+                KobitonLAContext.framework is a drop-in replacement for Apple's LocalAuthentication framework. It intercepts LAContext calls so the Kobiton platform can remotely inject biometric pass or fail results during test sessions — no app logic changes required. The framework is already bundled in this repo (sdk-files/ios/) and is auto-copied during expo prebuild.
               </Text>
               {[
-                ['1', 'Download KobitonLAContext.zip from the Kobiton portal:\nportal.kobiton.com → Settings → Biometric SDK'],
-                ['2', 'Extract the zip — you will get KobitonLAContext.framework.'],
-                ['3', 'Move KobitonLAContext.framework into ios/KobitonFrameworks/ (created automatically after expo prebuild).'],
-                ['4', 'Open ios/*.xcworkspace in Xcode → select project → General tab → Frameworks, Libraries, Embedded Content → click + → Add Other… → Add Files… → select KobitonLAContext.framework → click Add.'],
-                ['5', 'In the Embed dropdown next to KobitonLAContext.framework, select "Embed & Sign".'],
-                ['6', 'If your app has custom Swift code using LocalAuthentication: see KOBITON_LACONTEXT_PATCH.md in ios/ for import replacements. (Expo managed apps using expo-local-authentication need no Swift changes.)'],
-                ['7', 'Run: eas build --platform ios --profile preview'],
+                ['1', 'KobitonLAContext.framework is already included in sdk-files/ios/ — no download needed.'],
+                ['2', 'Run: npx expo prebuild --clean\nThe plugin auto-copies KobitonLAContext.framework → ios/KobitonFrameworks/'],
+                ['3', 'Open ios/*.xcworkspace in Xcode → select project → General tab → Frameworks, Libraries, Embedded Content → click + → Add Other… → Add Files… → select KobitonLAContext.framework → click Add.'],
+                ['4', 'In the Embed dropdown next to KobitonLAContext.framework, select "Embed & Sign".'],
+                ['5', 'If your app has custom Swift code using LocalAuthentication: see KOBITON_LACONTEXT_PATCH.md in ios/ for import replacements. (Expo managed apps using expo-local-authentication need no Swift changes.)'],
+                ['6', 'Run: eas build --platform ios --profile preview'],
               ].map(([n, text]) => (
                 <View key={n} style={styles.guideStep}>
                   <View style={[styles.guideStepNum, { backgroundColor: Colors.categoryOffice }]}>

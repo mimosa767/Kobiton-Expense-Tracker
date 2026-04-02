@@ -49,7 +49,8 @@
  *   KOBITON_CAMERA2_PATCH.md in android/.
  *
  * Biometric SDK:
- *   iOS  — KobitonLAContext.framework replaces LAContext at the OS level.
+ *   iOS  — KobitonLAContext.framework is bundled in sdk-files/ios/KobitonLAContext.framework/.
+ *          The plugin auto-copies it to ios/KobitonFrameworks/ during expo prebuild.
  *   Android — KobitonBiometric.aar wraps BiometricPrompt for the same effect.
  *
  * Build with EAS:
@@ -451,6 +452,20 @@ function withKobitonIosBiometric(config, options) {
         fs.mkdirSync(frameworksDir, { recursive: true });
       }
 
+      // Auto-copy KobitonLAContext.framework from sdk-files/ios/ if staged there
+      const stagedFw = path.join(projectRoot, 'sdk-files', 'ios', 'KobitonLAContext.framework');
+      const targetFw = path.join(frameworksDir, 'KobitonLAContext.framework');
+      if (fs.existsSync(stagedFw)) {
+        if (!fs.existsSync(targetFw)) {
+          fs.cpSync(stagedFw, targetFw, { recursive: true });
+          console.log('[KobitonSDK] ✓ Auto-copied KobitonLAContext.framework from sdk-files/ios/ → ios/KobitonFrameworks/');
+        } else {
+          console.log('[KobitonSDK] ✓ KobitonLAContext.framework already present in ios/KobitonFrameworks/ — skipping copy.');
+        }
+      } else {
+        console.warn('[KobitonSDK] ⚠ KobitonLAContext.framework not found in sdk-files/ios/. Place it there before running expo prebuild, or copy it manually to ios/KobitonFrameworks/KobitonLAContext.framework.');
+      }
+
       const readmeContent = [
         'Kobiton Biometric Authentication SDK for iOS (KobitonLAContext)',
         '================================================================',
@@ -463,31 +478,29 @@ function withKobitonIosBiometric(config, options) {
         'framework. It intercepts all LAContext calls so the Kobiton platform can inject',
         'biometric pass/fail results remotely during test sessions.',
         '',
+        'KobitonLAContext.framework is auto-copied from sdk-files/ios/ during expo prebuild.',
+        '',
         'SETUP',
         '-----',
         '',
-        '1. Download KobitonLAContext.zip from the Kobiton portal:',
-        '   portal.kobiton.com → Settings → Biometric SDK',
+        '1. Run: npx expo prebuild --clean',
+        '   → The plugin auto-copies KobitonLAContext.framework from sdk-files/ios/',
+        `   → Target: ${targetFw}`,
         '',
-        '2. Extract KobitonLAContext.zip — you will get KobitonLAContext.framework.',
+        '2. Open ios/*.xcworkspace in Xcode (NOT .xcodeproj).',
         '',
-        '3. Move KobitonLAContext.framework into THIS directory:',
-        `   ${frameworksDir}/KobitonLAContext.framework`,
-        '',
-        '4. Open ios/*.xcworkspace in Xcode (NOT .xcodeproj).',
-        '',
-        '5. Select your project → General tab →',
+        '3. Select your project → General tab →',
         '   Frameworks, Libraries, and Embedded Content → click +',
         '   → Add Other… → Add Files… → select KobitonLAContext.framework → click Add.',
         '',
-        '6. In the Embed dropdown next to KobitonLAContext.framework, select "Embed & Sign".',
+        '4. In the Embed dropdown next to KobitonLAContext.framework, select "Embed & Sign".',
         '',
-        '7. If you have custom Swift files that import LocalAuthentication:',
+        '5. If you have custom Swift files that import LocalAuthentication:',
         '   See KOBITON_LACONTEXT_PATCH.md in ios/ for the import replacement guide.',
         '   (For Expo managed apps using expo-local-authentication, no Swift changes',
         '    are needed — the framework intercepts LAContext at the OS level.)',
         '',
-        '8. Build: eas build --platform ios --profile preview',
+        '6. Build: eas build --platform ios --profile preview',
         '',
         'WHAT THE PLUGIN HANDLES AUTOMATICALLY',
         '--------------------------------------',
