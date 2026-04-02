@@ -21,6 +21,16 @@
  *       – Creates setup README and camera2 import replacement guide
  *   • Biometric SDK (biometricSupport):
  *       – Creates setup README for KobitonBiometric.aar
+ *       – Generates KobitonBiometricModule.kt + KobitonBiometricPackage.kt
+ *         (calls com.kobiton.biometric.BiometricPrompt directly so Kobiton can
+ *          intercept biometric calls — expo-local-authentication cannot be intercepted)
+ *       – Registers KobitonBiometricPackage in MainApplication.kt
+ *
+ * iOS:
+ *   • Biometric SDK (biometricSupport):
+ *       – Generates KobitonBiometricModule.swift + KobitonBiometricBridge.m
+ *         (calls KobitonLAContext() directly instead of LAContext() so Kobiton
+ *          can intercept biometric calls — expo-local-authentication cannot be intercepted)
  *
  * Usage in app.json:
  *   "plugins": [
@@ -1039,6 +1049,306 @@ function withKobitonAndroidBiometric(config, options) {
   return config;
 }
 
+// ─── Android: Biometric Native Module ────────────────────────────────────────
+
+/**
+ * Generates a custom React Native native module (KobitonBiometricModule.kt +
+ * KobitonBiometricPackage.kt) that calls com.kobiton.biometric.BiometricPrompt
+ * directly. This is required because expo-local-authentication uses
+ * androidx.biometric.BiometricPrompt internally — a different class that the
+ * Kobiton SDK cannot intercept. Using Kobiton's class explicitly allows the
+ * platform to inject pass/fail signals during test sessions.
+ */
+function withKobitonAndroidBiometricNativeModule(config, options) {
+  if (!options.biometricSupport) return config;
+
+  return withDangerousMod(config, [
+    'android',
+    async (mod) => {
+      const projectRoot = mod.modRequest.projectRoot;
+      const packageName = 'com.kobiton.expensetracker';
+      const packageDir = path.join(
+        projectRoot,
+        'android', 'app', 'src', 'main', 'java',
+        'com', 'kobiton', 'expensetracker'
+      );
+      if (!fs.existsSync(packageDir)) {
+        fs.mkdirSync(packageDir, { recursive: true });
+      }
+
+      // ── KobitonBiometricModule.kt ──────────────────────────────────────────
+      const moduleKt = `package ${packageName}
+
+import android.os.Handler
+import android.os.Looper
+import androidx.fragment.app.FragmentActivity
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableMap
+import com.kobiton.biometric.BiometricManager
+import com.kobiton.biometric.BiometricPrompt
+import java.util.concurrent.Executors
+
+/**
+ * React Native native module wrapping com.kobiton.biometric.BiometricPrompt.
+ *
+ * expo-local-authentication uses androidx.biometric.BiometricPrompt internally,
+ * which the Kobiton platform cannot intercept. This module calls the Kobiton
+ * class directly so the platform can inject biometric pass/fail signals during
+ * Kobiton test sessions.
+ *
+ * JS-side: NativeModules.KobitonBiometricModule.authenticate(reason)
+ *
+ * Kobiton injection command:
+ *   driver.execute('mobile:biometrics-authenticate', { result: 'passed' })
+ *   driver.execute('mobile:biometrics-authenticate', { result: 'failed' })
+ */
+class KobitonBiometricModule(reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName() = "KobitonBiometricModule"
+
+    @ReactMethod
+    fun isAvailable(promise: Promise) {
+        val activity = currentActivity
+        if (activity == null) {
+            promise.resolve(false)
+            return
+        }
+        try {
+            val mgr = BiometricManager.from(activity)
+            val status = mgr.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK)
+            promise.resolve(status == BiometricManager.BIOMETRIC_SUCCESS)
+        } catch (e: Exception) {
+            promise.resolve(false)
+        }
+    }
+
+    @ReactMethod
+    fun authenticate(reason: String, promise: Promise) {
+        val activity = currentActivity
+        if (activity == null) {
+            promise.resolve(buildResult(false, "Activity not available"))
+            return
+        }
+        if (activity !is FragmentActivity) {
+            promise.resolve(buildResult(false, "Activity is not a FragmentActivity"))
+            return
+        }
+
+        // NOTE: Must run on main thread; no Toast calls — known Kobiton issue
+        // (Toast in AuthenticationCallback causes NullPointerException on Kobiton devices)
+        Handler(Looper.getMainLooper()).post {
+            try {
+                val executor = Executors.newSingleThreadExecutor()
+                val callback = object : BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                        promise.resolve(buildResult(false, errString.toString()))
+                    }
+                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                        promise.resolve(buildResult(true, null))
+                    }
+                    override fun onAuthenticationFailed() {
+                        // Do not resolve here — wait for final error or success callback
+                    }
+                }
+
+                val promptInfo = BiometricPrompt.PromptInfo.Builder()
+                    .setTitle("Kobiton Expense Tracker")
+                    .setSubtitle(reason)
+                    .setNegativeButtonText("Cancel")
+                    .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK)
+                    .build()
+
+                BiometricPrompt(activity, executor, callback).authenticate(promptInfo)
+            } catch (e: Exception) {
+                promise.resolve(buildResult(false, e.message ?: "Unknown error"))
+            }
+        }
+    }
+
+    private fun buildResult(success: Boolean, error: String?): WritableMap =
+        Arguments.createMap().apply {
+            putBoolean("success", success)
+            if (error != null) putString("error", error)
+        }
+}
+`;
+
+      // ── KobitonBiometricPackage.kt ────────────────────────────────────────
+      const packageKt = `package ${packageName}
+
+import com.facebook.react.ReactPackage
+import com.facebook.react.bridge.NativeModule
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.uimanager.ViewManager
+
+class KobitonBiometricPackage : ReactPackage {
+    override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
+        listOf(KobitonBiometricModule(reactContext))
+
+    override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =
+        emptyList()
+}
+`;
+
+      fs.writeFileSync(path.join(packageDir, 'KobitonBiometricModule.kt'), moduleKt, 'utf8');
+      fs.writeFileSync(path.join(packageDir, 'KobitonBiometricPackage.kt'), packageKt, 'utf8');
+      console.log('[KobitonSDK] ✓ Wrote KobitonBiometricModule.kt + KobitonBiometricPackage.kt');
+
+      // ── Patch MainApplication.kt to register the package ──────────────────
+      const mainAppPath = path.join(packageDir, 'MainApplication.kt');
+      if (fs.existsSync(mainAppPath)) {
+        let mainApp = fs.readFileSync(mainAppPath, 'utf8');
+        if (!mainApp.includes('KobitonBiometricPackage')) {
+          mainApp = mainApp.replace(
+            /override fun getPackages\(\).*?\{([\s\S]*?)PackageList\(this\)\.packages/,
+            (match) => match.replace(
+              'PackageList(this).packages',
+              'PackageList(this).packages.also { it.add(KobitonBiometricPackage()) }'
+            )
+          );
+          if (!mainApp.includes('KobitonBiometricPackage()')) {
+            // fallback: append to getPackages if regex did not match
+            mainApp = mainApp.replace(
+              'PackageList(this).packages',
+              'PackageList(this).packages.also { packages -> packages.add(KobitonBiometricPackage()) }'
+            );
+          }
+          fs.writeFileSync(mainAppPath, mainApp, 'utf8');
+          console.log('[KobitonSDK] ✓ Registered KobitonBiometricPackage in MainApplication.kt');
+        } else {
+          console.log('[KobitonSDK] ✓ KobitonBiometricPackage already registered in MainApplication.kt');
+        }
+      } else {
+        console.warn('[KobitonSDK] ⚠ MainApplication.kt not found at expected path — add KobitonBiometricPackage() to getPackages() manually.');
+      }
+
+      return mod;
+    },
+  ]);
+}
+
+// ─── iOS: Biometric Native Module ─────────────────────────────────────────────
+
+/**
+ * Generates KobitonBiometricModule.swift + KobitonBiometricBridge.m in the iOS
+ * project. The Swift file uses KobitonLAContext() directly instead of LAContext(),
+ * which is required by the Kobiton Biometric SDK. expo-local-authentication uses
+ * LAContext internally and the Kobiton platform cannot intercept those calls.
+ * This module exposes NativeModules.KobitonBiometricModule on iOS.
+ */
+function withKobitonIosBiometricNativeModule(config, options) {
+  if (!options.biometricSupport) return config;
+
+  return withDangerousMod(config, [
+    'ios',
+    async (mod) => {
+      const projectRoot = mod.modRequest.projectRoot;
+      // Expo names the iOS folder from the app name (PascalCase of slug)
+      const iosProjectName = 'KobitonExpenseTracker';
+      const iosDir = path.join(projectRoot, 'ios', iosProjectName);
+      if (!fs.existsSync(iosDir)) {
+        fs.mkdirSync(iosDir, { recursive: true });
+      }
+
+      // ── KobitonBiometricBridge.m (Objective-C bridge) ─────────────────────
+      const bridgeM = `#import <React/RCTBridgeModule.h>
+
+/**
+ * Objective-C bridge exposing KobitonBiometricModule (Swift) to React Native.
+ * The Swift implementation uses KobitonLAContext() instead of LAContext() so
+ * the Kobiton platform can inject biometric pass/fail signals during test sessions.
+ *
+ * JS-side: NativeModules.KobitonBiometricModule.authenticate(reason)
+ *
+ * Kobiton injection:
+ *   driver.execute('mobile:biometrics-authenticate', { result: 'passed' })
+ *   driver.execute('mobile:biometrics-authenticate', { result: 'failed' })
+ */
+@interface RCT_EXTERN_MODULE(KobitonBiometricModule, NSObject)
+
+RCT_EXTERN_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(authenticate:(NSString *)reason
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
++ (BOOL)requiresMainQueueSetup;
+
+@end
+`;
+
+      // ── KobitonBiometricModule.swift ───────────────────────────────────────
+      const moduleSw = `import Foundation
+import KobitonLAContext
+
+/**
+ * React Native native module that calls KobitonLAContext() directly.
+ *
+ * KobitonLAContext is a drop-in replacement for Apple's LAContext.
+ * When this module is used instead of expo-local-authentication, the Kobiton
+ * platform can intercept the biometric prompt and inject pass/fail results
+ * remotely during test sessions — no physical finger or face required.
+ *
+ * JS-side: NativeModules.KobitonBiometricModule
+ */
+@objc(KobitonBiometricModule)
+class KobitonBiometricModule: NSObject {
+
+    @objc static func requiresMainQueueSetup() -> Bool { return false }
+
+    @objc
+    func isAvailable(
+        _ resolve: @escaping RCTPromiseResolveBlock,
+        reject: @escaping RCTPromiseRejectBlock
+    ) {
+        let context = KobitonLAContext()
+        var error: NSError?
+        let canEval = context.canEvaluatePolicy(
+            .deviceOwnerAuthenticationWithBiometrics,
+            error: &error
+        )
+        resolve(canEval)
+    }
+
+    @objc
+    func authenticate(
+        _ reason: String,
+        resolve: @escaping RCTPromiseResolveBlock,
+        reject: @escaping RCTPromiseRejectBlock
+    ) {
+        let context = KobitonLAContext()
+        context.evaluatePolicy(
+            .deviceOwnerAuthenticationWithBiometrics,
+            localizedReason: reason
+        ) { success, error in
+            DispatchQueue.main.async {
+                if success {
+                    resolve(["success": true])
+                } else {
+                    let msg = error?.localizedDescription ?? "Authentication failed"
+                    resolve(["success": false, "error": msg])
+                }
+            }
+        }
+    }
+}
+`;
+
+      fs.writeFileSync(path.join(iosDir, 'KobitonBiometricBridge.m'), bridgeM, 'utf8');
+      fs.writeFileSync(path.join(iosDir, 'KobitonBiometricModule.swift'), moduleSw, 'utf8');
+      console.log('[KobitonSDK] ✓ Wrote KobitonBiometricModule.swift + KobitonBiometricBridge.m for iOS');
+
+      return mod;
+    },
+  ]);
+}
+
 // ─── Main plugin ─────────────────────────────────────────────────────────────
 
 const withKobitonSDK = (config, options = {}) => {
@@ -1052,8 +1362,14 @@ const withKobitonSDK = (config, options = {}) => {
   if (options.biometricSupport) {
     config = withKobitonIosBiometric(config, options);
     config = withKobitonAndroidBiometric(config, options);
+    // Generate native modules that call Kobiton's classes directly.
+    // This is required because expo-local-authentication uses platform-stock
+    // classes (LAContext / androidx.biometric.BiometricPrompt) that Kobiton
+    // cannot intercept. The native modules call Kobiton's drop-in replacements.
+    config = withKobitonIosBiometricNativeModule(config, options);
+    config = withKobitonAndroidBiometricNativeModule(config, options);
   }
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.3.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.4.0');

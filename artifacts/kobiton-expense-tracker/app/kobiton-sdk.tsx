@@ -471,6 +471,7 @@ export default function KobitonSDKScreen() {
                 ['4', 'Replace android.hardware.camera2.* imports with kobiton.hardware.camera2.* equivalents in any custom native modules (see KOBITON_CAMERA2_PATCH.md generated in android/).'],
                 ['5', 'Update CameraManager init: replace getSystemService(Context.CAMERA_SERVICE) with CameraManager.getInstance(context).'],
                 ['6', 'Run: eas build --platform android --profile preview'],
+                ['⚠', 'Known issue — camera crash on Kobiton devices: The SDK uses hidden Android APIs that may be disabled. Fix by running in adb shell:\n\nsettings put global hidden_api_policy 1\n\nOr enable a Cleanup Policy with "Device settings will be reset" checked in the Kobiton portal.'],
               ].map(([n, text]) => (
                 <View key={n} style={styles.guideStep}>
                   <View style={[styles.guideStepNum, { backgroundColor: Colors.accent }]}>
@@ -649,14 +650,13 @@ export default function KobitonSDKScreen() {
                 <Text style={styles.guideTitle}>iOS Setup (KobitonLAContext)</Text>
               </View>
               <Text style={styles.guideBody}>
-                KobitonLAContext.framework is a drop-in replacement for Apple's LAContext. Embedding it allows Kobiton to intercept all Face ID / Touch ID calls.
+                KobitonLAContext.framework is already bundled in sdk-files/ios/. The plugin generates a native Swift module (KobitonBiometricModule.swift) that calls KobitonLAContext() directly — enabling Kobiton to inject Face ID / Touch ID results remotely.
               </Text>
               {[
-                ['1', 'Download KobitonLAContext.zip from the Kobiton portal'],
-                ['2', 'Move KobitonLAContext.framework into your Xcode project directory'],
-                ['3', 'In Xcode → Frameworks, Libraries and Embedded Content → Add → Embed & Sign'],
-                ['4', 'Enable biometricSupport: true in app.json plugin config (see below)'],
-                ['5', 'Run: eas build --platform ios --profile preview'],
+                ['1', 'KobitonLAContext.framework is bundled in sdk-files/ios/ — no download needed.'],
+                ['2', 'Run: npx expo prebuild --clean\nThe plugin auto-copies KobitonLAContext.framework → ios/KobitonFrameworks/ and writes KobitonBiometricModule.swift + KobitonBiometricBridge.m.'],
+                ['3', 'Open ios/*.xcworkspace in Xcode. Go to General → Frameworks, Libraries, and Embedded Content → + → Add Other → Add Files → select KobitonLAContext.framework → Embed & Sign.\nDo the same for KobitonSdk.framework if using image injection.'],
+                ['4', 'Run: eas build --platform ios --profile preview'],
               ].map(([n, text]) => (
                 <View key={n} style={styles.guideStep}>
                   <View style={styles.guideStepNum}>
@@ -665,8 +665,9 @@ export default function KobitonSDKScreen() {
                   <Text style={styles.guideStepText}>{text}</Text>
                 </View>
               ))}
+              <Text style={styles.patchTitle}>Why a native module?</Text>
               <View style={styles.codeBlock}>
-                <Text style={styles.codeText}>{`"plugins": [\n  ["./plugins/withKobitonSDK", {\n    "apiKey": "kbt_YOUR_KEY",\n    "biometricSupport": true\n  }]\n]`}</Text>
+                <Text style={styles.codeText}>{`expo-local-authentication uses LAContext() internally.\nKobiton cannot intercept stock LAContext — it can only\nintercept KobitonLAContext().\n\nThe generated KobitonBiometricModule.swift calls:\n  let context = KobitonLAContext()\n  context.evaluatePolicy(...)\n\nThis app's biometricService.ts uses NativeModules\n.KobitonBiometricModule automatically when available.`}</Text>
               </View>
             </View>
 
@@ -677,22 +678,26 @@ export default function KobitonSDKScreen() {
                 <Text style={[styles.guideTitle, { color: Colors.accent }]}>Android Setup (KobitonBiometric.aar)</Text>
               </View>
               <Text style={styles.guideBody}>
-                KobitonBiometric.aar wraps Android's BiometricPrompt to allow remote injection.
+                KobitonBiometric.aar is already bundled in sdk-files/android/. The plugin generates a native Kotlin module (KobitonBiometricModule.kt) that calls com.kobiton.biometric.BiometricPrompt directly — enabling Kobiton to inject biometric pass/fail signals during test sessions.
               </Text>
               {[
-                ['1', 'Download KobitonBiometric.aar from the Kobiton portal'],
-                ['2', 'Place it in android/app/libs/ (a README is added automatically by the plugin)'],
-                ['3', 'Add to build.gradle: implementation fileTree(dir: \'libs\', include: [\'*.aar\'])'],
-                ['4', 'Disable .CryptoObject in BiometricPrompt.AuthenticationCallback'],
-                ['5', 'Run: eas build --platform android --profile preview'],
+                ['1', 'KobitonBiometric.aar is bundled in sdk-files/android/ — no download needed.'],
+                ['2', 'Run: npx expo prebuild --clean\nThe plugin auto-copies KobitonBiometric.aar → android/app/libs/ and generates KobitonBiometricModule.kt + KobitonBiometricPackage.kt.'],
+                ['3', 'The plugin patches build.gradle (fileTree .aar), AndroidManifest.xml (USE_BIOMETRIC, INTERNET, usesCleartextTraffic), and registers KobitonBiometricPackage in MainApplication.kt.'],
+                ['4', 'Run: eas build --platform android --profile preview'],
+                ['⚠', 'Camera hidden API issue: If the camera crashes on Kobiton devices, run in adb shell:\n  settings put global hidden_api_policy 1'],
               ].map(([n, text]) => (
                 <View key={n} style={styles.guideStep}>
-                  <View style={[styles.guideStepNum, { backgroundColor: Colors.accent }]}>
+                  <View style={[styles.guideStepNum, { backgroundColor: n === '⚠' ? Colors.warning : Colors.accent }]}>
                     <Text style={styles.guideStepNumText}>{n}</Text>
                   </View>
                   <Text style={styles.guideStepText}>{text}</Text>
                 </View>
               ))}
+              <Text style={styles.patchTitle}>Why a native module?</Text>
+              <View style={styles.codeBlock}>
+                <Text style={styles.codeText}>{`expo-local-authentication uses androidx.biometric\n.BiometricPrompt internally. Kobiton can only intercept\ncom.kobiton.biometric.BiometricPrompt.\n\nThe generated KobitonBiometricModule.kt calls:\n  import com.kobiton.biometric.BiometricPrompt\n  BiometricPrompt(activity, executor, callback)\n    .authenticate(promptInfo)\n\nThis app's biometricService.ts uses NativeModules\n.KobitonBiometricModule automatically when available.`}</Text>
+              </View>
             </View>
 
             {/* Recent biometric events */}
