@@ -1184,9 +1184,31 @@ const withKobitonSDK = (config, options = {}) => {
     config = withKobitonAndroidBiometricNativeModule(config, options);
   }
 
-  // Link KobitonBiometric.aar from android/app/libs/ where withKobitonAndroidBiometric
-  // auto-copies it during prebuild. The path is relative to the app module directory
-  // (android/app/), so 'libs/KobitonBiometric.aar' resolves correctly.
+  // Ensure KobitonBiometric.aar is present in android/app/libs/ before Gradle runs.
+  // withKobitonAndroidBiometric only copies when biometricSupport:true; this block
+  // guarantees the copy happens unconditionally so the files() reference never breaks.
+  config = withDangerousMod(config, [
+    'android',
+    async (mod) => {
+      const projectRoot = mod.modRequest.projectRoot;
+      const libsDir = path.join(projectRoot, 'android', 'app', 'libs');
+      if (!fs.existsSync(libsDir)) {
+        fs.mkdirSync(libsDir, { recursive: true });
+      }
+      const src = path.join(projectRoot, 'sdk-files', 'android', 'KobitonBiometric.aar');
+      const dest = path.join(libsDir, 'KobitonBiometric.aar');
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, dest);
+        console.log('[KobitonSDK] ✓ Copied KobitonBiometric.aar → android/app/libs/');
+      } else {
+        console.warn('[KobitonSDK] ⚠ sdk-files/android/KobitonBiometric.aar not found — skipping copy');
+      }
+      return mod;
+    },
+  ]);
+
+  // Link KobitonBiometric.aar from android/app/libs/. Path is relative to the app
+  // module directory (android/app/), so 'libs/KobitonBiometric.aar' resolves correctly.
   config = withAppBuildGradle(config, (config) => {
     if (!config.modResults.contents.includes('KobitonBiometric.aar')) {
       config.modResults.contents = config.modResults.contents.replace(
@@ -1200,4 +1222,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.8.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.9.0');
