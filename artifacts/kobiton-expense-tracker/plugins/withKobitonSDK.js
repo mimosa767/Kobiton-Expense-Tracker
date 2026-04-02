@@ -1392,6 +1392,19 @@ const withKobitonSDK = (config, options = {}) => {
     config = withKobitonIosBiometricNativeModule(config, options);
     config = withKobitonAndroidBiometricNativeModule(config, options);
   }
+
+  // Inject androidx.biometric:biometric:1.1.0 into the Android app's build.gradle.
+  // Required so KobitonBiometricModule.kt can resolve BiometricManager and BiometricPrompt.
+  config = withAppBuildGradle(config, (config) => {
+    if (!config.modResults.contents.includes('androidx.biometric')) {
+      config.modResults.contents = config.modResults.contents.replace(
+        /dependencies\s*\{/,
+        `dependencies {\n    implementation 'androidx.biometric:biometric:1.1.0'`
+      );
+    }
+    return config;
+  });
+
   return config;
 };
 
