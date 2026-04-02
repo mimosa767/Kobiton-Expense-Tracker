@@ -21,10 +21,9 @@
  *       – Creates setup README and camera2 import replacement guide
  *   • Biometric SDK (biometricSupport):
  *       – Creates setup README for KobitonBiometric.aar
- *       – Generates KobitonBiometricModule.kt + KobitonBiometricPackage.kt
- *         (calls com.kobiton.biometric.BiometricPrompt directly so Kobiton can
- *          intercept biometric calls — expo-local-authentication cannot be intercepted)
- *       – Registers KobitonBiometricPackage in MainApplication.kt
+ *       – Links KobitonBiometric.aar via implementation files() in build.gradle
+ *         (the AAR contains Kobiton's biometric interception code; no custom
+ *          native module generation is required)
  *
  * iOS:
  *   • Biometric SDK (biometricSupport):
@@ -1052,12 +1051,10 @@ function withKobitonAndroidBiometric(config, options) {
 // ─── Android: Biometric Native Module ────────────────────────────────────────
 
 /**
- * Generates a custom React Native native module (KobitonBiometricModule.kt +
- * KobitonBiometricPackage.kt) that calls com.kobiton.biometric.BiometricPrompt
- * directly. This is required because expo-local-authentication uses
- * androidx.biometric.BiometricPrompt internally — a different class that the
- * Kobiton SDK cannot intercept. Using Kobiton's class explicitly allows the
- * platform to inject pass/fail signals during test sessions.
+ * No-op on Android — KobitonBiometric.aar is linked directly via
+ * implementation files() in build.gradle (see withKobitonSDK main function).
+ * The AAR contains Kobiton's compiled biometric interception code; no custom
+ * native module generation is required.
  */
 function withKobitonAndroidBiometricNativeModule(config, options) {
   if (!options.biometricSupport) return config;
@@ -1219,4 +1216,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.5.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.6.0');
