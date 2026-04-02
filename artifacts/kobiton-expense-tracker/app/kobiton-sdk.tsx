@@ -463,12 +463,12 @@ export default function KobitonSDKScreen() {
                 <Text style={[styles.guideTitle, { color: Colors.accent }]}>Android Image Injection SDK</Text>
               </View>
               <Text style={styles.guideBody}>
-                Kobiton's camera2.aar replaces the stock Android camera2 library so the platform can inject images and video into the camera feed during test sessions — no app logic changes required.
+                Kobiton's camera2.aar replaces the stock Android camera2 library so the platform can inject images and video into the camera feed during test sessions — no app logic changes required. The .aar is already bundled in this repo (sdk-files/android/) and is auto-copied during expo prebuild.
               </Text>
               {[
-                ['1', 'Download camera2.aar from the Kobiton SDK repository:\nhttps://kobiton.s3.amazonaws.com/downloads/camera2.aar'],
-                ['2', 'Place camera2.aar in android/app/libs/ — the Expo plugin creates this directory automatically after expo prebuild.'],
-                ['3', 'Set imageInjectionSupport: true in app.json (see below). The plugin then patches build.gradle and AndroidManifest.xml automatically.'],
+                ['1', 'camera2.aar is already included in sdk-files/android/ — no download needed.'],
+                ['2', 'Run: npx expo prebuild --clean\nThe plugin auto-copies camera2.aar → android/app/libs/'],
+                ['3', 'The plugin also patches build.gradle and AndroidManifest.xml automatically.'],
                 ['4', 'Replace android.hardware.camera2.* imports with kobiton.hardware.camera2.* equivalents in any custom native modules (see KOBITON_CAMERA2_PATCH.md generated in android/).'],
                 ['5', 'Update CameraManager init: replace getSystemService(Context.CAMERA_SERVICE) with CameraManager.getInstance(context).'],
                 ['6', 'Run: eas build --platform android --profile preview'],

@@ -42,9 +42,9 @@
  *   the README in ios/KobitonFrameworks/ or run scripts/setup-kobiton-ios.sh.
  *
  * Android Image Injection:
- *   Requires camera2.aar placed in android/app/libs/.
- *   Download: https://kobiton.s3.amazonaws.com/downloads/camera2.aar
- *   The plugin patches build.gradle + AndroidManifest.xml automatically.
+ *   camera2.aar is bundled in sdk-files/android/camera2.aar.
+ *   The plugin auto-copies it to android/app/libs/ during expo prebuild.
+ *   The plugin also patches build.gradle + AndroidManifest.xml automatically.
  *   You must also replace android.hardware.camera2.* imports — see
  *   KOBITON_CAMERA2_PATCH.md in android/.
  *
@@ -647,33 +647,50 @@ function withKobitonAndroidImageInjection(config, options) {
       const libsDir = path.join(projectRoot, 'android', 'app', 'libs');
       if (!fs.existsSync(libsDir)) fs.mkdirSync(libsDir, { recursive: true });
 
+      // Auto-copy camera2.aar from sdk-files/android/ if it has been staged there
+      const stagedAar = path.join(projectRoot, 'sdk-files', 'android', 'camera2.aar');
+      const targetAar = path.join(libsDir, 'camera2.aar');
+      if (fs.existsSync(stagedAar)) {
+        if (!fs.existsSync(targetAar)) {
+          fs.copyFileSync(stagedAar, targetAar);
+          console.log('[KobitonSDK] ✓ Auto-copied camera2.aar from sdk-files/android/ → android/app/libs/');
+        } else {
+          console.log('[KobitonSDK] ✓ camera2.aar already present in android/app/libs/ — skipping copy.');
+        }
+      } else {
+        console.warn('[KobitonSDK] ⚠ camera2.aar not found in sdk-files/android/. Place it there before running expo prebuild, or copy it manually to android/app/libs/camera2.aar.');
+      }
+
       const readmeContent = [
         'Kobiton Image Injection SDK for Android',
         '=========================================',
         '',
-        'To enable camera image injection on Kobiton devices:',
+        'camera2.aar is automatically copied here from sdk-files/android/',
+        'during expo prebuild — no manual download or file placement needed.',
         '',
-        '1. Download camera2.aar from the Kobiton S3 bucket:',
-        '   https://kobiton.s3.amazonaws.com/downloads/camera2.aar',
-        '   (The downloaded file name should be: camera2.aar)',
+        'STEP-BY-STEP SETUP',
+        '------------------',
         '',
-        '2. Place camera2.aar in this directory (android/app/libs/)',
+        '1. Run expo prebuild:',
+        '   npx expo prebuild --clean',
+        '   → The plugin auto-copies camera2.aar from sdk-files/android/',
+        `   → Target: ${libsDir}/camera2.aar`,
         '',
-        '3. The withKobitonSDK config plugin automatically adds the following',
+        '2. The withKobitonSDK config plugin automatically adds the following',
         '   to android/app/build.gradle:',
         '',
         '   dependencies {',
         "     implementation fileTree(dir: 'libs', include: ['*.aar'])",
         '   }',
         '',
-        '4. The plugin automatically patches AndroidManifest.xml to add:',
+        '3. The plugin automatically patches AndroidManifest.xml to add:',
         '   - <service android:name="kobiton.hardware.camera2.ImageInjectionClient" />',
         '   - <uses-permission android:name="android.permission.INTERNET" />',
         '   - <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
         '',
-        '5. Replace camera2 imports — see KOBITON_CAMERA2_PATCH.md in android/',
+        '4. Replace camera2 imports — see KOBITON_CAMERA2_PATCH.md in android/',
         '',
-        '6. Rebuild: eas build --platform android --profile preview',
+        '5. Rebuild: eas build --platform android --profile preview',
         '',
         'References:',
         '   https://docs.kobiton.com/apps/image-injection-sdk/add-the-sdk-to-your-android-app',
