@@ -397,8 +397,14 @@ export default function KobitonSDKScreen() {
               <Text style={styles.guideBody}>
                 KobitonLAContext.framework is a drop-in replacement for Apple's LocalAuthentication framework. It intercepts LAContext calls so the Kobiton platform can remotely inject biometric pass or fail results during test sessions — no app logic changes required.
               </Text>
+              <View style={styles.sdkNote}>
+                <Feather name="info" size={14} color={Colors.primary} style={{ marginTop: 2 }} />
+                <Text style={styles.sdkNoteText}>
+                  {'KobitonLAContext.zip is gated behind your Kobiton portal login. Visit docs.kobiton.com/apps/biometric-authentication-sdk/add-the-sdk-to-your-ios-app while logged into portal.kobiton.com to find the download link. If it does not appear, contact Kobiton Support at support.kobiton.com and request KobitonLAContext.zip for iOS.'}
+                </Text>
+              </View>
               {[
-                ['1', 'Download KobitonLAContext.zip from the Kobiton portal:\nportal.kobiton.com → Settings → Biometric SDK'],
+                ['1', 'Download KobitonLAContext.zip from the Kobiton portal:\nportal.kobiton.com → Apps → Biometric Authentication SDK'],
                 ['2', 'Extract the zip — you will get KobitonLAContext.framework.'],
                 ['3', 'Move KobitonLAContext.framework into ios/KobitonFrameworks/ (created automatically after expo prebuild).'],
                 ['4', 'Open ios/*.xcworkspace in Xcode → select project → General tab → Frameworks, Libraries, Embedded Content → click + → Add Other… → Add Files… → select KobitonLAContext.framework → click Add.'],
@@ -499,6 +505,12 @@ export default function KobitonSDKScreen() {
               <Text style={styles.guideBody}>
                 KobitonBiometric.aar wraps Android's BiometricPrompt so the Kobiton platform can remotely inject pass or fail signals into the biometric prompt during test sessions.
               </Text>
+              <View style={styles.sdkNote}>
+                <Feather name="info" size={14} color={Colors.primary} style={{ marginTop: 2 }} />
+                <Text style={styles.sdkNoteText}>
+                  {'KobitonBiometric.aar is gated behind your Kobiton portal login. Visit docs.kobiton.com/apps/biometric-authentication-sdk/add-the-sdk-to-your-android-app while logged into portal.kobiton.com to find the download link. If it does not appear, contact Kobiton Support at support.kobiton.com and request KobitonBiometric.aar for Android.'}
+                </Text>
+              </View>
 
               <Text style={styles.patchTitle}>Prerequisites (must all be met)</Text>
               {[
@@ -839,6 +851,8 @@ const styles = StyleSheet.create({
   guideHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   guideTitle: { fontSize: Typography.sizeMd, fontFamily: Typography.fontSemiBold, color: Colors.primary },
   guideBody: { fontSize: Typography.sizeSm, fontFamily: Typography.fontRegular, color: Colors.textSecondary, marginBottom: 10, lineHeight: 20 },
+  sdkNote: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: Colors.primary + '12', borderLeftWidth: 3, borderLeftColor: Colors.primary, borderRadius: Radius.sm, padding: 10, marginBottom: 12 },
+  sdkNoteText: { fontSize: Typography.sizeSm, fontFamily: Typography.fontRegular, color: Colors.textSecondary, flex: 1, lineHeight: 19 },
   guideStep: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8 },
   guideStepNum: { width: 22, height: 22, borderRadius: 11, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 },
   guideStepNumText: { fontSize: 11, fontFamily: Typography.fontBold, color: Colors.white },
