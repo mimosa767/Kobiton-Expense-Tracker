@@ -1231,16 +1231,23 @@ class KobitonBiometricPackage : ReactPackage {
     },
   ]);
 
-  // Add androidx.biometric so the generated KobitonBiometricModule.kt can resolve
-  // BiometricManager and BiometricPrompt at compile time.
-  // KobitonBiometric.aar extends these classes — it does not bundle them.
+  // Add androidx.biometric so KobitonBiometricModule.kt can resolve BiometricManager
+  // and BiometricPrompt at compile time. KobitonBiometric.aar wraps these classes
+  // but does not bundle them — the dependency must be declared explicitly.
+  //
+  // Strategy: append a standalone dependencies {} block at the end of the file.
+  // Gradle merges all dependency blocks, so this is always valid regardless of
+  // how the existing block is formatted or what other plugins have already patched.
   config = withAppBuildGradle(config, (mod) => {
-    const marker = 'androidx.biometric:biometric:';
-    if (!mod.modResults.contents.includes(marker)) {
-      mod.modResults.contents = mod.modResults.contents.replace(
-        /dependencies\s*\{/,
-        `dependencies {\n    // Required for KobitonBiometricModule.kt (BiometricManager + BiometricPrompt)\n    implementation 'androidx.biometric:biometric:1.1.0'`
-      );
+    if (!mod.modResults.contents.includes('androidx.biometric:biometric')) {
+      mod.modResults.contents +=
+        '\n// Kobiton Biometric SDK — androidx.biometric is required by KobitonBiometricModule.kt\n' +
+        'dependencies {\n' +
+        "    implementation 'androidx.biometric:biometric:1.1.0'\n" +
+        '}\n';
+      console.log('[KobitonSDK] ✓ Added androidx.biometric:biometric:1.1.0 to build.gradle');
+    } else {
+      console.log('[KobitonSDK] ✓ androidx.biometric:biometric already present in build.gradle — skipping');
     }
     return mod;
   });
@@ -1388,4 +1395,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.4.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '2.5.0');
