@@ -9,7 +9,9 @@
     "serve": "node server/serve.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "copy-biometric-aar": "node -e \"const fs=require('fs'); fs.mkdirSync('android/app/libs',{recursive:true}); fs.copyFileSync('sdk-files/android/KobitonBiometric.aar','android/app/libs/KobitonBiometric.aar');\"",
-    "postinstall": "node scripts/patch-kobiton-camera2.js"
+    "postinstall": "node scripts/patch-kobiton-camera2.js",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -66,6 +68,9 @@
     "expo-camera": "~17.0.10",
     "expo-local-authentication": "15.0.2",
     "react-hook-form": "^7.71.2",
-    "react-native-vision-camera": "^4.7.3"
+    "react-native-vision-camera": "^4.7.3",
+    "expo": "~54.0.33",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
   }
 }
