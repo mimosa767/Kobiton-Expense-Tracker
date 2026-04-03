@@ -1184,27 +1184,6 @@ const withKobitonSDK = (config, options = {}) => {
     config = withKobitonAndroidBiometricNativeModule(config, options);
   }
 
-  // Unconditional: copy KobitonBiometric.aar → android/app/libs/ so that
-  // implementation files('libs/KobitonBiometric.aar') in build.gradle always resolves.
-  // NOT inside any biometricSupport guard — runs for every build.
-  config = withDangerousMod(config, [
-    'android',
-    async (mod) => {
-      const projectRoot = mod.modRequest.projectRoot;
-      const libsDir = path.join(projectRoot, 'android', 'app', 'libs');
-      fs.mkdirSync(libsDir, { recursive: true });
-      const src = path.join(projectRoot, 'sdk-files', 'android', 'KobitonBiometric.aar');
-      const dest = path.join(libsDir, 'KobitonBiometric.aar');
-      if (fs.existsSync(src)) {
-        fs.copyFileSync(src, dest);
-        console.log('[KobitonSDK] ✓ Copied KobitonBiometric.aar → android/app/libs/');
-      } else {
-        console.warn('[KobitonSDK] ⚠ sdk-files/android/KobitonBiometric.aar not found — skipping copy');
-      }
-      return mod;
-    },
-  ]);
-
   // Link KobitonBiometric.aar from android/app/libs/. Path is relative to the app
   // module directory (android/app/), so 'libs/KobitonBiometric.aar' resolves correctly.
   config = withAppBuildGradle(config, (config) => {
@@ -1220,4 +1199,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.0.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.1.0');
