@@ -64,6 +64,7 @@
     "expo-battery": "~10.0.8",
     "expo-camera": "~17.0.10",
     "expo-local-authentication": "15.0.2",
-    "react-hook-form": "^7.71.2"
+    "react-hook-form": "^7.71.2",
+    "react-native-vision-camera": "^4.7.3"
   }
 }

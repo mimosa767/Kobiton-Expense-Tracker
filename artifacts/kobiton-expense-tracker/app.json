@@ -45,6 +45,12 @@
       "expo-web-browser",
       "expo-image-picker",
       [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "Allow Kobiton Expense Tracker to capture receipt photos."
+        }
+      ],
+      [
         "./plugins/withKobitonSDK",
         {
           "apiKey": "",

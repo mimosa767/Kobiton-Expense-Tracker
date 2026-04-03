@@ -58,6 +58,10 @@ function RootLayoutNav() {
       <Stack.Screen name="kobiton-sdk" />
       <Stack.Screen name="guide" />
       <Stack.Screen name="crash-app" />
+      <Stack.Screen
+        name="camera"
+        options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
+      />
     </Stack>
   );
 }

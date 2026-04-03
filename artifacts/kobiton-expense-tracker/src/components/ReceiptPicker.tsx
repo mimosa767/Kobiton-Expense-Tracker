@@ -9,8 +9,10 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { Colors, Radius, Shadow, Spacing, Typography } from '../constants/theme';
+import { setCameraCallback } from '../utils/cameraCallback';
 
 interface Props {
   uri: string | null;
@@ -20,26 +22,17 @@ interface Props {
 }
 
 export function ReceiptPicker({ uri, name, onChange, testID }: Props) {
-  async function pickFromCamera() {
+  const router = useRouter();
+
+  function pickFromCamera() {
     if (Platform.OS === 'web') {
       Alert.alert('Camera Unavailable', 'Camera capture is not supported in web browsers. Please use the Gallery option to upload an image from your device.');
       return;
     }
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Permission Required', 'Camera access is needed to take a photo. Please enable it in your device settings.');
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.8,
-      allowsEditing: true,
+    setCameraCallback((photoUri, fileName) => {
+      onChange(photoUri, fileName);
     });
-    if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0];
-      const fileName = asset.fileName ?? `receipt_${Date.now()}.jpg`;
-      onChange(asset.uri, fileName);
-    }
+    router.push('/camera');
   }
 
   async function pickFromGallery() {
