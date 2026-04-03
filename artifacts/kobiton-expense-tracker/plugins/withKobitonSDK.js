@@ -1116,7 +1116,7 @@ class KobitonBiometricModule(reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun authenticate(title: String, subtitle: String, promise: Promise) {
-        val activity = currentActivity as? FragmentActivity
+        val activity = reactApplicationContext.currentActivity as? FragmentActivity
         if (activity == null) {
             promise.reject("E_NO_ACTIVITY", "No FragmentActivity available — ensure the app is in the foreground")
             return
@@ -1411,4 +1411,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.5.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.6.0');
