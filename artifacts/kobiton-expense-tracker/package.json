@@ -8,7 +8,8 @@
     "build": "node scripts/build.js",
     "serve": "node server/serve.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "copy-biometric-aar": "node -e \"const fs=require('fs'); fs.mkdirSync('android/app/libs',{recursive:true}); fs.copyFileSync('sdk-files/android/KobitonBiometric.aar','android/app/libs/KobitonBiometric.aar');\""
+    "copy-biometric-aar": "node -e \"const fs=require('fs'); fs.mkdirSync('android/app/libs',{recursive:true}); fs.copyFileSync('sdk-files/android/KobitonBiometric.aar','android/app/libs/KobitonBiometric.aar');\"",
+    "postinstall": "node scripts/patch-kobiton-camera2.js"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
