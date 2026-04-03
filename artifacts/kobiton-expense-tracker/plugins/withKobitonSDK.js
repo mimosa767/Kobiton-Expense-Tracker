@@ -1311,12 +1311,19 @@ class KobitonBiometricModule: NSObject {
         _ resolve: @escaping RCTPromiseResolveBlock,
         reject: @escaping RCTPromiseRejectBlock
     ) {
+        print("[KobitonSDK] isAvailable called")
         let context = KobitonLAContext()
         var error: NSError?
         let canEval = context.canEvaluatePolicy(
             .deviceOwnerAuthenticationWithBiometrics,
             error: &error
         )
+        if !canEval {
+            let reason = error?.localizedDescription ?? "unknown reason"
+            print("[KobitonSDK] isAvailable: not available — \\(reason)")
+        } else {
+            print("[KobitonSDK] isAvailable: biometrics available")
+        }
         resolve(canEval)
     }
 
@@ -1326,6 +1333,7 @@ class KobitonBiometricModule: NSObject {
         resolve: @escaping RCTPromiseResolveBlock,
         reject: @escaping RCTPromiseRejectBlock
     ) {
+        print("[KobitonSDK] authenticate called — reason: \\(reason)")
         let context = KobitonLAContext()
         context.evaluatePolicy(
             .deviceOwnerAuthenticationWithBiometrics,
@@ -1333,9 +1341,11 @@ class KobitonBiometricModule: NSObject {
         ) { success, error in
             DispatchQueue.main.async {
                 if success {
+                    print("[KobitonSDK] authenticate: succeeded")
                     resolve(["success": true])
                 } else {
                     let msg = error?.localizedDescription ?? "Authentication failed"
+                    print("[KobitonSDK] authenticate: failed — \\(msg)")
                     resolve(["success": false, "error": msg])
                 }
             }
