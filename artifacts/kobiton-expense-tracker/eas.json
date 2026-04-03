@@ -5,7 +5,6 @@
   "build": {
     "preview": {
       "distribution": "internal",
-      "postPrebuildCommand": "node -e \"const fs=require('fs'); fs.mkdirSync('android/app/libs',{recursive:true}); fs.copyFileSync('sdk-files/android/KobitonBiometric.aar','android/app/libs/KobitonBiometric.aar');\"",
       "android": {
         "buildType": "apk"
       },
