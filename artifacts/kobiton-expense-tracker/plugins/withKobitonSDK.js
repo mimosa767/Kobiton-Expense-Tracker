@@ -1081,7 +1081,7 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableNativeMap
-import com.kobiton.biometric.BiometricConstants
+import android.util.Log
 import com.kobiton.biometric.BiometricManager
 import com.kobiton.biometric.BiometricPrompt
 
@@ -1106,57 +1106,79 @@ import com.kobiton.biometric.BiometricPrompt
 class KobitonBiometricModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
-    override fun getName(): String = "KobitonBiometricModule"
+    companion object {
+        private const val TAG = "[KobitonSDK]"
+    }
 
-    @ReactMethod
-    fun isAvailable(promise: Promise) {
-        val manager = BiometricManager.from(reactApplicationContext)
-        promise.resolve(manager.canAuthenticate() == BiometricManager.BIOMETRIC_SUCCESS)
+    override fun getName(): String {
+        Log.d(TAG, "KobitonBiometricModule loaded")
+        return "KobitonBiometricModule"
     }
 
     @ReactMethod
-    fun authenticate(title: String, subtitle: String, promise: Promise) {
-        val activity = reactApplicationContext.currentActivity as? FragmentActivity
-        if (activity == null) {
-            promise.reject("E_NO_ACTIVITY", "No FragmentActivity available — ensure the app is in the foreground")
-            return
+    fun isAvailable(promise: Promise) {
+        try {
+            val manager = BiometricManager.from(reactApplicationContext)
+            promise.resolve(manager.canAuthenticate() == BiometricManager.BIOMETRIC_SUCCESS)
+        } catch (e: Exception) {
+            Log.e(TAG, "isAvailable failed: \${e.javaClass.name}: \${e.message}", e)
+            promise.reject("E_BIOMETRIC_ERROR", e.message ?: "Unknown error in isAvailable")
         }
+    }
 
-        val manager = BiometricManager.from(reactApplicationContext)
-        if (manager.canAuthenticate() != BiometricManager.BIOMETRIC_SUCCESS) {
-            promise.reject("E_NOT_AVAILABLE", "Biometric authentication is not available on this device")
-            return
-        }
-
-        val mainHandler = Handler(Looper.getMainLooper())
-
-        val callback = object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                val map = WritableNativeMap()
-                map.putBoolean("success", true)
-                promise.resolve(map)
+    @ReactMethod
+    fun authenticate(reason: String, promise: Promise) {
+        try {
+            val activity = reactApplicationContext.currentActivity as? FragmentActivity
+            if (activity == null) {
+                Log.e(TAG, "authenticate: no FragmentActivity — is the app foregrounded?")
+                promise.reject("E_NO_ACTIVITY", "No FragmentActivity available — ensure the app is in the foreground")
+                return
             }
 
-            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                promise.reject("E_BIOMETRIC_ERROR_\$errorCode", errString.toString())
+            val manager = BiometricManager.from(reactApplicationContext)
+            if (manager.canAuthenticate() != BiometricManager.BIOMETRIC_SUCCESS) {
+                Log.e(TAG, "authenticate: biometrics not available (canAuthenticate=\${manager.canAuthenticate()})")
+                promise.reject("E_NOT_AVAILABLE", "Biometric authentication is not available on this device")
+                return
             }
 
-            override fun onAuthenticationFailed() {
-                // Biometric presented but not recognised — the system prompt
-                // remains visible and the user can try again. Do NOT reject
-                // the promise here; wait for succeeded or error.
+            val mainHandler = Handler(Looper.getMainLooper())
+
+            val callback = object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    Log.d(TAG, "authenticate: succeeded")
+                    val map = WritableNativeMap()
+                    map.putBoolean("success", true)
+                    promise.resolve(map)
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    Log.e(TAG, "authenticate: error \$errorCode — \$errString")
+                    promise.reject("E_BIOMETRIC_ERROR_\$errorCode", errString.toString())
+                }
+
+                override fun onAuthenticationFailed() {
+                    // Biometric presented but not recognised — system prompt stays
+                    // visible for retry. Do NOT reject the promise here.
+                    Log.d(TAG, "authenticate: failed attempt (user may retry)")
+                }
             }
-        }
 
-        val promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(title)
-            .setSubtitle(subtitle)
-            .setNegativeButtonText("Cancel")
-            .build()
+            val promptInfo = BiometricPrompt.PromptInfo.Builder()
+                .setTitle(reason)
+                .setSubtitle("Verify your identity")
+                .setNegativeButtonText("Cancel")
+                .build()
 
-        activity.runOnUiThread {
-            val biometricPrompt = BiometricPrompt(activity, mainHandler::post, callback)
-            biometricPrompt.authenticate(promptInfo)
+            activity.runOnUiThread {
+                Log.d(TAG, "authenticate: showing biometric prompt")
+                val biometricPrompt = BiometricPrompt(activity, mainHandler::post, callback)
+                biometricPrompt.authenticate(promptInfo)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "authenticate: top-level exception — \${e.javaClass.name}: \${e.message}", e)
+            promise.reject("E_BIOMETRIC_ERROR", e.message ?: "Unknown error in authenticate")
         }
     }
 }
@@ -1354,37 +1376,12 @@ const withKobitonSDK = (config, options = {}) => {
   // (biometricService.ts falls back to expo-local-authentication when null).
   config = withKobitonAndroidBiometricNativeModule(config, options);
 
-  // Read KobitonBiometric.aar directly from sdk-files/android/ in the repo root.
-  // Path is relative to the app module directory (android/app/), so ../../ resolves
-  // to the repo root — no copying needed, survives expo prebuild --clean.
-  config = withAppBuildGradle(config, (config) => {
-    if (!config.modResults.contents.includes('KobitonBiometric.aar')) {
-      config.modResults.contents = config.modResults.contents.replace(
-        /dependencies\s*\{/,
-        `dependencies {\n    implementation files('../../sdk-files/android/KobitonBiometric.aar')`
-      );
-    }
-    return config;
-  });
-
-  // Fallback direct path reference for camera2.aar — mirrors the KobitonBiometric.aar
-  // pattern above. The withKobitonAndroidImageInjection function already injects a
-  // fileTree(dir: 'libs', include: ['*.aar']) dependency, but fileTree can silently
-  // miss files if the libs/ directory is not populated before Gradle resolves dependencies.
-  // This direct ../../sdk-files/android/camera2.aar path bypasses libs/ entirely and
-  // resolves straight from the repo root, guaranteeing Gradle always finds the AAR
-  // regardless of whether expo prebuild copied it to libs/ first.
-  if (options.imageInjectionSupport) {
-    config = withAppBuildGradle(config, (config) => {
-      if (!config.modResults.contents.includes('sdk-files/android/camera2.aar')) {
-        config.modResults.contents = config.modResults.contents.replace(
-          /dependencies\s*\{/,
-          `dependencies {\n    implementation files('../../sdk-files/android/camera2.aar')`
-        );
-      }
-      return config;
-    });
-  }
+  // Both KobitonBiometric.aar and camera2.aar are auto-copied to android/app/libs/
+  // by withKobitonAndroidBiometricNativeModule and withKobitonAndroidImageInjection
+  // respectively. The fileTree(dir: 'libs', include: ['*.aar']) dependency already
+  // added by withKobitonAndroidImageInjection picks up both AARs. No additional
+  // implementation files() references are needed — duplicating them causes
+  // DuplicateFilesException during the Gradle link phase.
 
   // camera2.aar declares minSdkVersion 26 but the app targets 24.
   // tools:overrideLibrary tells Gradle to allow the mismatch — the app is
