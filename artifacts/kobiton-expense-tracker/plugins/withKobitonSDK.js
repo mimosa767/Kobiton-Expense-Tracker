@@ -1367,6 +1367,25 @@ const withKobitonSDK = (config, options = {}) => {
     return config;
   });
 
+  // Fallback direct path reference for camera2.aar — mirrors the KobitonBiometric.aar
+  // pattern above. The withKobitonAndroidImageInjection function already injects a
+  // fileTree(dir: 'libs', include: ['*.aar']) dependency, but fileTree can silently
+  // miss files if the libs/ directory is not populated before Gradle resolves dependencies.
+  // This direct ../../sdk-files/android/camera2.aar path bypasses libs/ entirely and
+  // resolves straight from the repo root, guaranteeing Gradle always finds the AAR
+  // regardless of whether expo prebuild copied it to libs/ first.
+  if (options.imageInjectionSupport) {
+    config = withAppBuildGradle(config, (config) => {
+      if (!config.modResults.contents.includes('sdk-files/android/camera2.aar')) {
+        config.modResults.contents = config.modResults.contents.replace(
+          /dependencies\s*\{/,
+          `dependencies {\n    implementation files('../../sdk-files/android/camera2.aar')`
+        );
+      }
+      return config;
+    });
+  }
+
   // camera2.aar declares minSdkVersion 26 but the app targets 24.
   // tools:overrideLibrary tells Gradle to allow the mismatch — the app is
   // responsible for guarding camera2 usage behind an API-level check at runtime.
@@ -1392,4 +1411,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.4.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.5.0');
