@@ -1197,7 +1197,29 @@ const withKobitonSDK = (config, options = {}) => {
     return config;
   });
 
+  // camera2.aar declares minSdkVersion 26 but the app targets 24.
+  // tools:overrideLibrary tells Gradle to allow the mismatch — the app is
+  // responsible for guarding camera2 usage behind an API-level check at runtime.
+  config = withAndroidManifest(config, (mod) => {
+    const manifest = mod.modResults.manifest;
+
+    // Ensure xmlns:tools is declared on <manifest>
+    manifest.$['xmlns:tools'] = manifest.$['xmlns:tools'] || 'http://schemas.android.com/tools';
+
+    // Add tools:overrideLibrary to <uses-sdk>
+    if (!manifest['uses-sdk']) {
+      manifest['uses-sdk'] = [{ $: {} }];
+    }
+    const usesSdk = manifest['uses-sdk'][0];
+    usesSdk.$ = usesSdk.$ || {};
+    if (!usesSdk.$['tools:overrideLibrary']) {
+      usesSdk.$['tools:overrideLibrary'] = 'kobiton.hardware.camera2';
+    }
+
+    return mod;
+  });
+
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.2.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.3.0');
