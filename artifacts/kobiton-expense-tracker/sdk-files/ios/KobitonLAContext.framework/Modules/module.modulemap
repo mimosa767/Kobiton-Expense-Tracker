@@ -1,0 +1,6 @@
+framework module KobitonLAContext {
+  umbrella header "KobitonLAContext.h"
+
+  export *
+  module * { export * }
+}

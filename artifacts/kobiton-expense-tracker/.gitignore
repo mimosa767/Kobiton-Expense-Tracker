@@ -9,9 +9,9 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native
-ios/
-android/
+# Native — anchored to project root so sdk-files/android/ is NOT ignored
+/ios/
+/android/
 *.orig.*
 *.jks
 *.p8
