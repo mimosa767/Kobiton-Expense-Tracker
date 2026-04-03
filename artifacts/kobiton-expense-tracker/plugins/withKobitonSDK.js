@@ -1184,13 +1184,14 @@ const withKobitonSDK = (config, options = {}) => {
     config = withKobitonAndroidBiometricNativeModule(config, options);
   }
 
-  // Link KobitonBiometric.aar from android/app/libs/. Path is relative to the app
-  // module directory (android/app/), so 'libs/KobitonBiometric.aar' resolves correctly.
+  // Read KobitonBiometric.aar directly from sdk-files/android/ in the repo root.
+  // Path is relative to the app module directory (android/app/), so ../../ resolves
+  // to the repo root — no copying needed, survives expo prebuild --clean.
   config = withAppBuildGradle(config, (config) => {
     if (!config.modResults.contents.includes('KobitonBiometric.aar')) {
       config.modResults.contents = config.modResults.contents.replace(
         /dependencies\s*\{/,
-        `dependencies {\n    implementation files('libs/KobitonBiometric.aar')`
+        `dependencies {\n    implementation files('../../sdk-files/android/KobitonBiometric.aar')`
       );
     }
     return config;
@@ -1199,4 +1200,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.1.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.2.0');
