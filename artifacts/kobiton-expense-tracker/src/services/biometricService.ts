@@ -128,19 +128,24 @@ async function authenticate(reason = 'Sign in to Kobiton Expense Tracker'): Prom
   // ── iOS + Android fallback: expo-local-authentication ─────────────────────
   // On iOS, KobitonLAContext.framework intercepts the LAContext calls made
   // internally by expo-local-authentication, so Kobiton injection works.
+  // Pre-checks (hasHardwareAsync / isEnrolledAsync) are skipped on iOS —
+  // the Kobiton portal handles pass/fail via KobitonLAContext regardless of
+  // whether the physical device has Face ID enrolled.
   try {
     const LocalAuthentication = await import('expo-local-authentication');
 
-    const hardwareAvailable = await LocalAuthentication.hasHardwareAsync();
-    if (!hardwareAvailable) {
-      kobitonSDK.logEvent('biometric_result', 'warn', { result: 'unsupported', reason: 'no_hardware' });
-      return { success: false, reason: 'unsupported', message: 'No biometric hardware found on this device' };
-    }
+    if (Platform.OS !== 'ios') {
+      const hardwareAvailable = await LocalAuthentication.hasHardwareAsync();
+      if (!hardwareAvailable) {
+        kobitonSDK.logEvent('biometric_result', 'warn', { result: 'unsupported', reason: 'no_hardware' });
+        return { success: false, reason: 'unsupported', message: 'No biometric hardware found on this device' };
+      }
 
-    const enrolled = await LocalAuthentication.isEnrolledAsync();
-    if (!enrolled) {
-      kobitonSDK.logEvent('biometric_result', 'warn', { result: 'not_enrolled', reason: 'no_biometrics_enrolled' });
-      return { success: false, reason: 'not_enrolled', message: 'No biometrics enrolled on this device' };
+      const enrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!enrolled) {
+        kobitonSDK.logEvent('biometric_result', 'warn', { result: 'not_enrolled', reason: 'no_biometrics_enrolled' });
+        return { success: false, reason: 'not_enrolled', message: 'No biometrics enrolled on this device' };
+      }
     }
 
     kobitonSDK.logEvent('biometric_os_prompt_shown', 'info', { prompt_message: reason });
