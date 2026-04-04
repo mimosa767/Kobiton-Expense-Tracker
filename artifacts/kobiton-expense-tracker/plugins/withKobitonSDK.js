@@ -146,45 +146,15 @@ function withKobitonAppDelegate(config, options) {
 
     if (isSwift) {
       // ── Swift AppDelegate (Expo SDK 52+) ─────────────────────────────────
+      // Per official Kobiton docs: embed KobitonLAContext.framework and add
+      // `import KobitonLAContext`. The framework self-initialises via its own
+      // +load method — no configure() call is needed in app code.
       if (options.biometricSupport && !modResults.contents.includes('KobitonLAContext')) {
-        // 1. Add import so the framework is linked and the type is accessible.
         modResults.contents = modResults.contents.replace(
           'import Expo',
-          'import Expo\nimport KobitonLAContext // biometric injection — drop-in for LAContext'
+          'import Expo\nimport KobitonLAContext // Kobiton biometric SDK — drop-in replacement for LocalAuthentication'
         );
-
-        // 2. Call KobitonLAContext.configure() at app launch via ObjC runtime.
-        //    configure() is not declared in the public header, so we probe at
-        //    runtime with respondsToSelector — safe whether it exists or not.
-        //    This starts the embedded GCDWebServer that the Kobiton portal
-        //    connects to for biometric pass/fail injection signals.
-        //    The print line is the device-log proof-of-execution the Kobiton
-        //    team looks for to confirm the SDK initialised before the test runs.
-        const configureBlock = `
-    // ── Kobiton Biometric SDK initialisation ──────────────────────────────
-    // configure() starts the embedded GCDWebServer inside KobitonLAContext.framework.
-    // The Kobiton portal connects to this server to inject biometric signals.
-    // Called via ObjC runtime because the public header does not declare it.
-    if let kobitonClass = NSClassFromString("KobitonLAContext") as? NSObject.Type {
-      let configureSel = NSSelectorFromString("configure")
-      if kobitonClass.responds(to: configureSel) {
-        kobitonClass.perform(configureSel)
-        print("[KobitonSDK] configure called")
-      } else {
-        print("[KobitonSDK] configure not found — KobitonLAContext self-initialises")
-      }
-    } else {
-      print("[KobitonSDK] KobitonLAContext class not found — framework not loaded")
-    }`;
-
-        // Insert the block at the very start of didFinishLaunchingWithOptions,
-        // before any React Native factory setup, so the SDK is alive before JS runs.
-        modResults.contents = modResults.contents.replace(
-          'let delegate = ReactNativeDelegate()',
-          `${configureBlock}\n\n    let delegate = ReactNativeDelegate()`
-        );
-
-        console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — import + configure() call');
+        console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — added import KobitonLAContext');
       }
     } else {
       // ── ObjC AppDelegate (Expo SDK < 52) ──────────────────────────────────
@@ -2096,14 +2066,12 @@ const withKobitonSDK = (config, options = {}) => {
   if (options.biometricSupport) {
     config = withKobitonIosBiometric(config, options);
     config = withKobitonAndroidBiometric(config, options);
-    // iOS native module: calls KobitonLAContext() instead of LAContext() so
-    // the Kobiton platform can intercept biometric prompts on iOS.
-    config = withKobitonIosBiometricNativeModule(config, options);
+    // iOS: KobitonLAContext.framework is embedded via withKobitonIosEmbedFrameworks below.
+    //      No native module is needed — the framework intercepts LAContext at the OS level.
   }
 
   // Android native module runs UNCONDITIONALLY — the Kotlin files must always
-  // be compiled so NativeModules.KobitonBiometricModule is non-null in JS
-  // (biometricService.ts falls back to expo-local-authentication when null).
+  // be compiled so NativeModules.KobitonBiometricModule is non-null in JS.
   config = withKobitonAndroidBiometricNativeModule(config, options);
 
   // Both KobitonBiometric.aar and camera2.aar are auto-copied to android/app/libs/
