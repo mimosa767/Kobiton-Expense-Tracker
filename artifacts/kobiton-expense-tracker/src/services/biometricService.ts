@@ -24,6 +24,14 @@ const KobitonBiometricModule: {
   authenticate: (reason: string) => Promise<{ success: boolean; error?: string }>;
 } | null = NativeModules.KobitonBiometricModule ?? null;
 
+// Diagnostic — visible in Kobiton device logs (JS console output)
+if (KobitonBiometricModule) {
+  console.log('[KobitonSDK] ✅ NativeModules.KobitonBiometricModule FOUND — Kobiton biometric injection active');
+} else {
+  console.warn('[KobitonSDK] ⚠ NativeModules.KobitonBiometricModule is NULL — will fall back to expo-local-authentication (Kobiton injection WILL NOT WORK)');
+  console.warn('[KobitonSDK] Available NativeModules keys:', Object.keys(NativeModules).join(', '));
+}
+
 async function isAvailable(): Promise<boolean> {
   if (Platform.OS === 'web') return false;
 
@@ -76,6 +84,9 @@ async function hasHardware(): Promise<boolean> {
  * expo-local-authentication (biometric injection will not work in this mode).
  */
 async function authenticate(reason = 'Sign in to Kobiton Expense Tracker'): Promise<BiometricResult> {
+  // Direct console output — shows in Kobiton device session logs
+  console.log(`[KobitonSDK] authenticate() called — platform: ${Platform.OS} — NativeModules.KobitonBiometricModule: ${KobitonBiometricModule ? 'PRESENT ✅' : 'NULL ⚠ (fallback mode)'}`);
+
   kobitonSDK.logEvent('biometric_prompt_triggered', 'info', {
     reason,
     platform: Platform.OS,
