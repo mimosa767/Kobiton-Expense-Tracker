@@ -140,13 +140,48 @@ function withKobitonAppDelegate(config, options) {
   return withAppDelegate(config, (mod) => {
     const { modResults } = mod;
 
-    if (!modResults.contents.includes('KobitonSDK')) {
-      const importLines = [
-        '#import <KobitonSDK/KobitonSDK.h>',
-        options.biometricSupport ? '#import <KobitonLAContext/KobitonLAContext.h>' : null,
-      ].filter(Boolean).join('\n');
+    // Expo SDK 52+ generates a Swift AppDelegate; earlier versions use ObjC.
+    // Detect by checking the module language field or presence of Swift imports.
+    const isSwift = modResults.language === 'swift' || modResults.contents.includes('import Expo');
 
-      const initCode = `
+    if (isSwift) {
+      // ── Swift AppDelegate (Expo SDK 52+) ─────────────────────────────────
+      // Only biometric support needs patching here — add import + configure call.
+      // The KobitonSDK CocoaPod initialization (ObjC block below) does not apply
+      // to Swift AppDelegates; it is handled via Info.plist keys instead.
+      if (options.biometricSupport && !modResults.contents.includes('KobitonLAContext')) {
+        // Add KobitonLAContext import after the Expo import line
+        modResults.contents = modResults.contents.replace(
+          'import Expo',
+          'import Expo\nimport KobitonLAContext'
+        );
+
+        // Insert configure call before ReactNativeDelegate setup so the SDK is
+        // active before React Native initializes and any JS biometric calls fire.
+        modResults.contents = modResults.contents.replace(
+          'let delegate = ReactNativeDelegate()',
+          [
+            '// ─── Kobiton Biometric SDK ──────────────────────────────────────────────',
+            '    // KobitonLAContext.configure() must run before React Native starts so the',
+            '    // Kobiton platform can intercept all LAContext calls during test sessions.',
+            '    // Injection: driver.execute(\'mobile:biometrics-authenticate\', {result: \'passed\'})',
+            '    KobitonLAContext.configure()',
+            '    NSLog("[KobitonSDK] KobitonLAContext initialized")',
+            '',
+            '    let delegate = ReactNativeDelegate()',
+          ].join('\n')
+        );
+        console.log('[KobitonSDK] ✓ Patched Swift AppDelegate with KobitonLAContext.configure()');
+      }
+    } else {
+      // ── ObjC AppDelegate (Expo SDK < 52) ──────────────────────────────────
+      if (!modResults.contents.includes('KobitonSDK')) {
+        const importLines = [
+          '#import <KobitonSDK/KobitonSDK.h>',
+          options.biometricSupport ? '#import <KobitonLAContext/KobitonLAContext.h>' : null,
+        ].filter(Boolean).join('\n');
+
+        const initCode = `
   // ─── Kobiton SDK Initialization ──────────────────────────────────────────
   NSDictionary *kobitonInfo = [[NSBundle mainBundle] infoDictionary];
   NSString *kobitonAPIKey = kobitonInfo[@"KobitonAPIKey"];
@@ -164,15 +199,16 @@ function withKobitonAppDelegate(config, options) {
   [KobitonLAContext configure];
   NSLog(@"[Kobiton] Biometric SDK (KobitonLAContext) active");` : ''}`;
 
-      modResults.contents = modResults.contents.replace(
-        '#import "AppDelegate.h"',
-        `#import "AppDelegate.h"\n${importLines}`
-      );
+        modResults.contents = modResults.contents.replace(
+          '#import "AppDelegate.h"',
+          `#import "AppDelegate.h"\n${importLines}`
+        );
 
-      modResults.contents = modResults.contents.replace(
-        /return \[super application:application didFinishLaunchingWithOptions:launchOptions\];/,
-        `${initCode}\n  return [super application:application didFinishLaunchingWithOptions:launchOptions];`
-      );
+        modResults.contents = modResults.contents.replace(
+          /return \[super application:application didFinishLaunchingWithOptions:launchOptions\];/,
+          `${initCode}\n  return [super application:application didFinishLaunchingWithOptions:launchOptions];`
+        );
+      }
     }
 
     return mod;
@@ -1623,7 +1659,8 @@ class KobitonPackage : ReactPackage {
 function withKobitonIosBiometricNativeModule(config, options) {
   if (!options.biometricSupport) return config;
 
-  return withDangerousMod(config, [
+  // Step 1: Write source files to disk + update bridging header
+  config = withDangerousMod(config, [
     'ios',
     async (mod) => {
       const projectRoot = mod.modRequest.projectRoot;
@@ -1733,9 +1770,112 @@ class KobitonBiometricModule: NSObject {
       fs.writeFileSync(path.join(iosDir, 'KobitonBiometricModule.swift'), moduleSw, 'utf8');
       console.log('[KobitonSDK] ✓ Wrote KobitonBiometricModule.swift + KobitonBiometricBridge.m for iOS');
 
+      // ── Bridging Header: expose <React/RCTBridgeModule.h> to Swift ─────────
+      // RCTPromiseResolveBlock and RCTPromiseRejectBlock are ObjC types used in
+      // KobitonBiometricModule.swift. Without this import in the bridging header
+      // the Swift file cannot resolve those types and the build fails.
+      const bridgingHeaderPath = path.join(iosDir, `${iosProjectName}-Bridging-Header.h`);
+      let bridgingHeader = fs.existsSync(bridgingHeaderPath)
+        ? fs.readFileSync(bridgingHeaderPath, 'utf8')
+        : '//\n// Use this file to import your target\'s public headers that you would like to expose to Swift.\n//\n';
+      if (!bridgingHeader.includes('RCTBridgeModule')) {
+        bridgingHeader = bridgingHeader.trimEnd()
+          + '\n\n// Required for KobitonBiometricModule.swift — exposes RCTPromiseResolveBlock,\n'
+          + '// RCTPromiseRejectBlock, and other React Native ObjC types to Swift.\n'
+          + '#import <React/RCTBridgeModule.h>\n';
+        fs.writeFileSync(bridgingHeaderPath, bridgingHeader, 'utf8');
+        console.log('[KobitonSDK] ✓ Updated bridging header with <React/RCTBridgeModule.h>');
+      }
+
       return mod;
     },
   ]);
+
+  // ── Xcode project: add generated files to the Sources Build Phase ─────────
+  // withDangerousMod only writes files to disk. Without adding them to the
+  // Xcode project's PBXSourcesBuildPhase, Xcode will not compile them —
+  // RCT_EXTERN_MODULE never executes and NativeModules.KobitonBiometricModule
+  // is null in JS.
+  //
+  // We patch project.pbxproj as text rather than using node-xcode's
+  // addSourceFile() API, which throws on null entries in generated Expo projects.
+  // Deterministic UUIDs (24 hex chars) are used so re-runs are idempotent.
+  config = withDangerousMod(config, [
+    'ios',
+    async (mod) => {
+      const projectRoot = mod.modRequest.projectRoot;
+      const pbxprojPath = path.join(
+        projectRoot, 'ios', 'KobitonExpenseTracker.xcodeproj', 'project.pbxproj'
+      );
+      if (!fs.existsSync(pbxprojPath)) {
+        console.warn('[KobitonSDK] ⚠ project.pbxproj not found — skipping Xcode source registration.');
+        return mod;
+      }
+
+      let pbx = fs.readFileSync(pbxprojPath, 'utf8');
+
+      // Already patched — idempotent guard
+      if (pbx.includes('KobitonBiometricBridge.m')) {
+        console.log('[KobitonSDK] ✓ KobitonBiometricBridge.m already in Xcode project — skipping.');
+        return mod;
+      }
+
+      // Deterministic 24-hex-char UUIDs for our four new entries
+      const BRIDGE_BUILD_UUID = '4B544E0000000000000001AA'; // Bridge.m  → build file
+      const BRIDGE_REF_UUID   = '4B544E0000000000000002AA'; // Bridge.m  → file reference
+      const MODULE_BUILD_UUID = '4B544E0000000000000003AA'; // Module.swift → build file
+      const MODULE_REF_UUID   = '4B544E0000000000000004AA'; // Module.swift → file reference
+
+      // 1. PBXBuildFile section — insert two new build-file entries
+      const buildFileEntries = [
+        `\t\t${BRIDGE_BUILD_UUID} /* KobitonBiometricBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = ${BRIDGE_REF_UUID} /* KobitonBiometricBridge.m */; };`,
+        `\t\t${MODULE_BUILD_UUID} /* KobitonBiometricModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = ${MODULE_REF_UUID} /* KobitonBiometricModule.swift */; };`,
+      ].join('\n');
+      pbx = pbx.replace(
+        '/* Begin PBXBuildFile section */',
+        `/* Begin PBXBuildFile section */\n${buildFileEntries}`
+      );
+
+      // 2. PBXFileReference section — insert two new file reference entries
+      const fileRefEntries = [
+        `\t\t${BRIDGE_REF_UUID} /* KobitonBiometricBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = KobitonBiometricBridge.m; path = KobitonExpenseTracker/KobitonBiometricBridge.m; sourceTree = "<group>"; };`,
+        `\t\t${MODULE_REF_UUID} /* KobitonBiometricModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KobitonBiometricModule.swift; path = KobitonExpenseTracker/KobitonBiometricModule.swift; sourceTree = "<group>"; };`,
+      ].join('\n');
+      pbx = pbx.replace(
+        '/* Begin PBXFileReference section */',
+        `/* Begin PBXFileReference section */\n${fileRefEntries}`
+      );
+
+      // 3. PBXGroup — add to the KobitonExpenseTracker group's children list.
+      //    Anchor: the AppDelegate.swift child line (always present).
+      pbx = pbx.replace(
+        /(\t+\w+ \/\* AppDelegate\.swift \*\/,)/,
+        [
+          '$1',
+          `\t\t\t\t${BRIDGE_REF_UUID} /* KobitonBiometricBridge.m */,`,
+          `\t\t\t\t${MODULE_REF_UUID} /* KobitonBiometricModule.swift */,`,
+        ].join('\n')
+      );
+
+      // 4. PBXSourcesBuildPhase — add to the Sources compile list.
+      //    Anchor: the AppDelegate.swift in Sources build-file line (always present).
+      pbx = pbx.replace(
+        /(\t+\w+ \/\* AppDelegate\.swift in Sources \*\/,)/,
+        [
+          '$1',
+          `\t\t\t\t${BRIDGE_BUILD_UUID} /* KobitonBiometricBridge.m in Sources */,`,
+          `\t\t\t\t${MODULE_BUILD_UUID} /* KobitonBiometricModule.swift in Sources */,`,
+        ].join('\n')
+      );
+
+      fs.writeFileSync(pbxprojPath, pbx, 'utf8');
+      console.log('[KobitonSDK] ✓ Added KobitonBiometricBridge.m + KobitonBiometricModule.swift to Xcode project (all 4 PBX sections)');
+
+      return mod;
+    },
+  ]);
+
+  return config;
 }
 
 // ─── Main plugin ─────────────────────────────────────────────────────────────
