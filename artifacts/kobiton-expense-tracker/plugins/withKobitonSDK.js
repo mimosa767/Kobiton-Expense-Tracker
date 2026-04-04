@@ -160,11 +160,30 @@ function withKobitonAppDelegate(config, options) {
         //    Uses a non-greedy multiline match from the override keyword to the opening brace
         //    so it targets only that method and not any other -> Bool return.
         if (!modResults.contents.includes('KobitonLAContext.configure()')) {
+          const before = modResults.contents;
           modResults.contents = modResults.contents.replace(
             /(didFinishLaunchingWithOptions[\s\S]*?\) -> Bool \{)/,
-            '$1\n    NSLog("[TEST] AppDelegate didFinishLaunching")\n    KobitonLAContext.configure()\n    print("[KobitonSDK] configure called")'
+            [
+              '$1',
+              '    NSLog("[DIAG] didFinishLaunching — process=%@ bundle=%@", ProcessInfo.processInfo.processName, Bundle.main.bundleIdentifier ?? "nil")',
+              '    NSLog("[DIAG] KobitonLAContext class loaded: %@", NSStringFromClass(KobitonLAContext.self))',
+              '    KobitonLAContext.configure()',
+              '    NSLog("[DIAG] KobitonLAContext.configure() returned")',
+              '    print("[KobitonSDK] configure called")',
+            ].join('\n')
           );
-          console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — added configure() and diagnostic NSLog');
+
+          // Verify the regex actually matched — emit an error with a content snippet if not
+          if (modResults.contents === before) {
+            console.error('[KobitonSDK] ✗ FAILED: configure() patch did NOT apply — regex matched nothing.');
+            console.error('[KobitonSDK]   AppDelegate first 800 chars:');
+            console.error(modResults.contents.substring(0, 800));
+          } else {
+            console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — added configure() and diagnostic NSLogs');
+            console.log('[KobitonSDK]   Verify: contains configure():', modResults.contents.includes('KobitonLAContext.configure()'));
+          }
+        } else {
+          console.log('[KobitonSDK] ✓ configure() already present in AppDelegate — skipping patch');
         }
       }
     } else {
@@ -664,6 +683,70 @@ function withKobitonIosBiometric(config, options) {
     });
   }
 
+  // Step 3a: Write KobitonEarlyDiagnostic.m — a standalone ObjC class whose +load
+  //   fires at dylib-load time, BEFORE AppDelegate. This is the earliest possible
+  //   native log point and proves the binary is executing at all.
+  config = withDangerousMod(config, [
+    'ios',
+    async (mod) => {
+      const projectRoot = mod.modRequest.projectRoot;
+      const appName = mod.modRequest.projectName;
+      const moduleDir = path.join(projectRoot, 'ios', appName);
+      if (!fs.existsSync(moduleDir)) fs.mkdirSync(moduleDir, { recursive: true });
+
+      const earlyDiagContent = [
+        '#import <Foundation/Foundation.h>',
+        '#import <os/log.h>',
+        '',
+        '// KobitonEarlyDiagnostic: +load fires at dylib-load time, before AppDelegate.',
+        '// If this log line appears, the binary is executing and NSLog is captured.',
+        '@interface KobitonEarlyDiagnostic : NSObject',
+        '@end',
+        '',
+        '@implementation KobitonEarlyDiagnostic',
+        '',
+        '+ (void)load {',
+        '    // Plain NSLog — goes to syslog / ASL',
+        '    NSLog(@"[DIAG-PRELOAD] KobitonEarlyDiagnostic +load — binary executing at dylib load time");',
+        '    // os_log — goes to Unified Logging System (more reliable on iOS 10+)',
+        '    os_log(OS_LOG_DEFAULT, "[DIAG-PRELOAD] KobitonEarlyDiagnostic +load — ULS channel");',
+        '}',
+        '',
+        '@end',
+      ].join('\n');
+
+      const earlyPath = path.join(moduleDir, 'KobitonEarlyDiagnostic.m');
+      fs.writeFileSync(earlyPath, earlyDiagContent, 'utf8');
+      console.log(`[KobitonSDK] ✓ Wrote KobitonEarlyDiagnostic.m → ${earlyPath}`);
+      return mod;
+    },
+  ]);
+
+  // Step 3b: Register KobitonEarlyDiagnostic.m in Xcode Sources build phase.
+  config = withXcodeProject(config, (mod) => {
+    const xcodeProject = mod.modResults;
+    const appName = mod.modRequest.projectName;
+
+    const sources = xcodeProject.pbxSourcesBuildPhaseObj(xcodeProject.getFirstTarget().uuid);
+    const alreadyAdded = sources && sources.files &&
+      sources.files.some((f) => {
+        const ref = xcodeProject.pbxFileReferenceSection()[f.value];
+        return ref && ref.path && ref.path.includes('KobitonEarlyDiagnostic.m');
+      });
+
+    if (!alreadyAdded) {
+      const groupKey = xcodeProject.findPBXGroupKey({ name: appName });
+      xcodeProject.addSourceFile(
+        `${appName}/KobitonEarlyDiagnostic.m`,
+        { target: xcodeProject.getFirstTarget().uuid },
+        groupKey
+      );
+      console.log('[KobitonSDK] ✓ Registered KobitonEarlyDiagnostic.m in Xcode Sources build phase');
+    }
+
+    return mod;
+  });
+
   // Step 3: Write KobitonBiometricModule.m into ios/{appName}/ during prebuild.
   //   This file uses KobitonLAContext instead of LAContext so Kobiton can inject
   //   biometric pass/fail signals. It also calls [TrustAgent startServer] via the
@@ -682,6 +765,7 @@ function withKobitonIosBiometric(config, options) {
       const moduleContent = [
         '#import <React/RCTBridgeModule.h>',
         '#import <KobitonLAContext/KobitonLAContext.h>',
+        '#import <os/log.h>',
         '',
         '@interface KobitonBiometricModule : NSObject <RCTBridgeModule>',
         '@end',
@@ -692,7 +776,10 @@ function withKobitonIosBiometric(config, options) {
         '+ (NSString *)moduleName { return @"KobitonBiometricModule"; }',
         '',
         '+ (void)load {',
-        '    NSLog(@"[KobitonSDK] +load entered");',
+        '    // Both NSLog (syslog/ASL) and os_log (Unified Logging System) so we capture',
+        '    // on whichever channel the Kobiton session log viewer reads.',
+        '    NSLog(@"[KobitonSDK] KobitonBiometricModule +load entered");',
+        '    os_log(OS_LOG_DEFAULT, "[KobitonSDK] KobitonBiometricModule +load entered (ULS)");',
         '    RCTRegisterModule(self);',
         '',
         '    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),',
@@ -703,36 +790,45 @@ function withKobitonIosBiometric(config, options) {
         '            if ([trustAgentClass respondsToSelector:startServerSel]) {',
         '                [trustAgentClass performSelector:startServerSel];',
         '                NSLog(@"[KobitonSDK] TrustAgent startServer called");',
+        '                os_log(OS_LOG_DEFAULT, "[KobitonSDK] TrustAgent startServer called (ULS)");',
         '            } else {',
-        '                NSLog(@"[KobitonSDK] TrustAgent startServer selector not found");',
+        '                NSLog(@"[KobitonSDK] TrustAgent found but startServer selector missing");',
         '            }',
         '        } else {',
-        '            NSLog(@"[KobitonSDK] TrustAgent class not found");',
+        '            NSLog(@"[KobitonSDK] TrustAgent class NOT found via NSClassFromString");',
         '        }',
         '    });',
         '}',
         '',
         'RCT_EXPORT_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve',
         '                  reject:(RCTPromiseRejectBlock)reject) {',
+        '    NSLog(@"[KobitonSDK] isAvailable called");',
         '    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];',
         '    NSError *error = nil;',
         '    BOOL ok = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics',
         '                               error:&error];',
+        '    NSLog(@"[KobitonSDK] isAvailable result=%@ error=%@", ok ? @"YES" : @"NO", error.localizedDescription);',
         '    resolve(@(ok));',
         '}',
         '',
         'RCT_EXPORT_METHOD(authenticate:(NSString *)reason',
         '                  resolve:(RCTPromiseResolveBlock)resolve',
         '                  reject:(RCTPromiseRejectBlock)reject) {',
+        '    NSLog(@"[KobitonSDK] authenticate called reason=%@", reason);',
+        '    os_log(OS_LOG_DEFAULT, "[KobitonSDK] authenticate called (ULS)");',
         '    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];',
+        '    NSLog(@"[KobitonSDK] KobitonLAContext instance class: %@", NSStringFromClass([ctx class]));',
         '    [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics',
         '        localizedReason:reason',
         '                  reply:^(BOOL success, NSError *error) {',
         '        if (success) {',
         '            NSLog(@"[KobitonSDK] authenticate: SUCCESS");',
+        '            os_log(OS_LOG_DEFAULT, "[KobitonSDK] authenticate SUCCESS (ULS)");',
         '            resolve(@{@"success": @YES});',
         '        } else {',
-        '            NSLog(@"[KobitonSDK] authenticate: FAILED — %@", error.localizedDescription);',
+        '            NSLog(@"[KobitonSDK] authenticate: FAILED code=%ld desc=%@",',
+        '                  (long)error.code, error.localizedDescription);',
+        '            os_log(OS_LOG_DEFAULT, "[KobitonSDK] authenticate FAILED (ULS)");',
         '            reject(@"E_BIOMETRIC_ERROR", error.localizedDescription, error);',
         '        }',
         '    }];',
