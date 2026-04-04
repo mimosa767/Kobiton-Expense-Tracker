@@ -2289,9 +2289,8 @@ const withKobitonSDK = (config, options = {}) => {
   }
   if (options.biometricSupport) {
     config = withKobitonIosBiometric(config, options);
+    config = withKobitonIosBiometricNativeModule(config, options);
     config = withKobitonAndroidBiometric(config, options);
-    // iOS: KobitonLAContext.framework is embedded via withKobitonIosEmbedFrameworks below.
-    //      No native module is needed — the framework intercepts LAContext at the OS level.
   }
 
   // Android native module runs UNCONDITIONALLY — the Kotlin files must always
