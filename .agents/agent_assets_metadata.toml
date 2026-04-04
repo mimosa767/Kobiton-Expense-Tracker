@@ -12,3 +12,9 @@ id = "kp5FknnFJ1VzAXwa1y-uE"
 uri = "file://kobiton-expense-tracker.tar.gz"
 type = "unspecified"
 title = "Kobiton Expense Tracker — full project source"
+
+[[outputs]]
+id = "kHQSWYnCP_yOgDuHcrpGO"
+uri = "file://kobiton-expense-tracker.zip"
+type = "unspecified"
+title = "Kobiton Expense Tracker — latest source (with +initialize fix)"
