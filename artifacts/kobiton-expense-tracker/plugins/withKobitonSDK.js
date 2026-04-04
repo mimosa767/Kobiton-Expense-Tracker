@@ -1634,156 +1634,162 @@ class KobitonPackage : ReactPackage {
 // ─── iOS: Biometric Native Module ─────────────────────────────────────────────
 
 /**
- * Generates KobitonBiometricModule.swift + KobitonBiometricBridge.m in the iOS
- * project. The Swift file uses KobitonLAContext() directly instead of LAContext(),
- * which is required by the Kobiton Biometric SDK. expo-local-authentication uses
- * LAContext internally and the Kobiton platform cannot intercept those calls.
+ * Generates a single pure-ObjC KobitonBiometricModule.m in the iOS project.
+ *
+ * WHY PURE OBJC (not Swift + RCT_EXTERN_MODULE):
+ *   RCT_EXTERN_MODULE relies on the ObjC runtime finding a Swift-generated class
+ *   at bridge startup. This is fragile — the Swift class can be dead-stripped by
+ *   the linker if there are no direct references to it, or can fail with new arch.
+ *   RCT_EXPORT_MODULE() in pure ObjC registers via +load (fires unconditionally at
+ *   class load time, before main()) and is guaranteed to appear in NativeModules.
+ *
+ * The +load method also safely attempts [KobitonLAContext configure] via ObjC
+ * runtime messaging (respondsToSelector guard) — this starts the embedded
+ * GCDWebServer inside KobitonLAContext.framework that the Kobiton portal uses
+ * to deliver biometric injection signals. All results are NSLog'd with
+ * [KobitonSDK] prefix so they appear in native device logs.
+ *
  * This module exposes NativeModules.KobitonBiometricModule on iOS.
  */
 function withKobitonIosBiometricNativeModule(config, options) {
   if (!options.biometricSupport) return config;
 
-  // Step 1: Write source files to disk + update bridging header
+  // Step 1: Write KobitonBiometricModule.m to disk (pure ObjC, no Swift bridge)
   config = withDangerousMod(config, [
     'ios',
     async (mod) => {
       const projectRoot = mod.modRequest.projectRoot;
-      // Expo names the iOS folder from the app name (PascalCase of slug)
       const iosProjectName = 'KobitonExpenseTracker';
       const iosDir = path.join(projectRoot, 'ios', iosProjectName);
       if (!fs.existsSync(iosDir)) {
         fs.mkdirSync(iosDir, { recursive: true });
       }
 
-      // ── KobitonBiometricBridge.m (Objective-C bridge) ─────────────────────
-      const bridgeM = `#import <React/RCTBridgeModule.h>
+      // ── KobitonBiometricModule.m — pure ObjC native module ─────────────────
+      //
+      // Uses RCT_EXPORT_MODULE() (not RCT_EXTERN_MODULE) which registers via
+      // +load — the most reliable registration path that works regardless of
+      // new-arch / old-arch / link order.
+      //
+      // +load also safely probes for [KobitonLAContext configure] using
+      // respondsToSelector so the GCDWebServer embedded in KobitonLAContext
+      // starts as early as possible (before React Native initialises).
+      const moduleM = `#import <React/RCTBridgeModule.h>
+#import <LocalAuthentication/LocalAuthentication.h>
+#import <KobitonLAContext/KobitonLAContext.h>
+#import <KobitonSdk/KobitonSdk.h>
 
 /**
- * Objective-C bridge exposing KobitonBiometricModule (Swift) to React Native.
- * The Swift implementation uses KobitonLAContext() instead of LAContext() so
- * the Kobiton platform can inject biometric pass/fail signals during test sessions.
+ * Kobiton Biometric Native Module — pure Objective-C
  *
- * JS-side: NativeModules.KobitonBiometricModule.authenticate(reason)
+ * Registers as NativeModules.KobitonBiometricModule in React Native.
+ * Uses KobitonLAContext (Kobiton's drop-in for Apple LAContext) so the Kobiton
+ * platform can inject biometric pass/fail signals during test sessions without
+ * requiring a physically enrolled biometric on the device.
  *
- * Kobiton injection:
+ * Injection from the Kobiton portal:
  *   driver.execute('mobile:biometrics-authenticate', { result: 'passed' })
  *   driver.execute('mobile:biometrics-authenticate', { result: 'failed' })
+ *
+ * All log lines carry the [KobitonSDK] prefix so they are searchable in the
+ * Kobiton device session log viewer.
  */
-@interface RCT_EXTERN_MODULE(KobitonBiometricModule, NSObject)
+@interface KobitonBiometricModule : NSObject <RCTBridgeModule>
+@end
 
-RCT_EXTERN_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve
+@implementation KobitonBiometricModule
+
+// RCT_EXPORT_MODULE() registers this class with React Native's module registry
+// via +load — fires before main(), guaranteed to appear in NativeModules.
+RCT_EXPORT_MODULE()
+
+// +load fires when the ObjC runtime loads the class — before main() and before
+// React Native initialises. This is the earliest safe point to trigger
+// KobitonLAContext initialisation (starts its embedded GCDWebServer so the
+// Kobiton portal can reach the app to inject biometric signals).
++ (void)load {
+    // ── KobitonSdk (image injection) ─────────────────────────────────────────
+    // Log the version number to confirm the camera-injection framework is linked
+    // and loaded. If this line appears in device logs, the frame interception
+    // layer is alive. If absent, the framework was not linked / not embedded.
+    NSLog(@"[KobitonSDK] KobitonSdk.framework loaded — version %.0f", KobitonSdkVersionNumber);
+
+    // ── KobitonLAContext (biometric injection) ────────────────────────────────
+    // Safely attempt to call configure() via the ObjC runtime so the embedded
+    // GCDWebServer starts up. The Kobiton portal connects to this web server to
+    // deliver biometric pass/fail injection signals.
+    NSLog(@"[KobitonSDK] KobitonBiometricModule +load — KobitonLAContext.framework is present");
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    SEL configureSel = NSSelectorFromString(@"configure");
+    if ([KobitonLAContext respondsToSelector:configureSel]) {
+        [KobitonLAContext performSelector:configureSel];
+        NSLog(@"[KobitonSDK] KobitonLAContext configure called OK — web-server should be running");
+    } else {
+        NSLog(@"[KobitonSDK] KobitonLAContext.configure not found — framework self-initialises via +load");
+    }
+#pragma clang diagnostic pop
+}
+
+RCT_EXPORT_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
+{
+    NSLog(@"[KobitonSDK] isAvailable called");
+    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];
+    NSError *error = nil;
+    BOOL ok = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
+                               error:&error];
+    if (ok) {
+        NSLog(@"[KobitonSDK] isAvailable: YES");
+    } else {
+        NSLog(@"[KobitonSDK] isAvailable: NO — %@", error.localizedDescription);
+    }
+    resolve(@(ok));
+}
 
-RCT_EXTERN_METHOD(authenticate:(NSString *)reason
+RCT_EXPORT_METHOD(authenticate:(NSString *)reason
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
+{
+    NSLog(@"[KobitonSDK] authenticate — reason: %@", reason);
+    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];
+    [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
+        localizedReason:reason
+                  reply:^(BOOL success, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (success) {
+                NSLog(@"[KobitonSDK] authenticate: SUCCESS — Kobiton injected biometric OK");
+                resolve(@{@"success": @YES});
+            } else {
+                NSString *msg = error.localizedDescription ?: @"Authentication failed";
+                NSLog(@"[KobitonSDK] authenticate: FAILED — %@", msg);
+                resolve(@{@"success": @NO, @"error": msg});
+            }
+        });
+    }];
+}
 
-+ (BOOL)requiresMainQueueSetup;
++ (BOOL)requiresMainQueueSetup { return NO; }
 
 @end
 `;
 
-      // ── KobitonBiometricModule.swift ───────────────────────────────────────
-      const moduleSw = `import Foundation
-import KobitonLAContext
-
-/**
- * React Native native module that calls KobitonLAContext() directly.
- *
- * KobitonLAContext is a drop-in replacement for Apple's LAContext.
- * When this module is used instead of expo-local-authentication, the Kobiton
- * platform can intercept the biometric prompt and inject pass/fail results
- * remotely during test sessions — no physical finger or face required.
- *
- * JS-side: NativeModules.KobitonBiometricModule
- */
-@objc(KobitonBiometricModule)
-class KobitonBiometricModule: NSObject {
-
-    @objc static func requiresMainQueueSetup() -> Bool { return false }
-
-    @objc
-    func isAvailable(
-        _ resolve: @escaping RCTPromiseResolveBlock,
-        reject: @escaping RCTPromiseRejectBlock
-    ) {
-        print("[KobitonSDK] isAvailable called")
-        let context = KobitonLAContext()
-        var error: NSError?
-        let canEval = context.canEvaluatePolicy(
-            .deviceOwnerAuthenticationWithBiometrics,
-            error: &error
-        )
-        if !canEval {
-            let reason = error?.localizedDescription ?? "unknown reason"
-            print("[KobitonSDK] isAvailable: not available — \\(reason)")
-        } else {
-            print("[KobitonSDK] isAvailable: biometrics available")
-        }
-        resolve(canEval)
-    }
-
-    @objc
-    func authenticate(
-        _ reason: String,
-        resolve: @escaping RCTPromiseResolveBlock,
-        reject: @escaping RCTPromiseRejectBlock
-    ) {
-        print("[KobitonSDK] authenticate called — reason: \\(reason)")
-        let context = KobitonLAContext()
-        context.evaluatePolicy(
-            .deviceOwnerAuthenticationWithBiometrics,
-            localizedReason: reason
-        ) { success, error in
-            DispatchQueue.main.async {
-                if success {
-                    print("[KobitonSDK] authenticate: succeeded")
-                    resolve(["success": true])
-                } else {
-                    let msg = error?.localizedDescription ?? "Authentication failed"
-                    print("[KobitonSDK] authenticate: failed — \\(msg)")
-                    resolve(["success": false, "error": msg])
-                }
-            }
-        }
-    }
-}
-`;
-
-      fs.writeFileSync(path.join(iosDir, 'KobitonBiometricBridge.m'), bridgeM, 'utf8');
-      fs.writeFileSync(path.join(iosDir, 'KobitonBiometricModule.swift'), moduleSw, 'utf8');
-      console.log('[KobitonSDK] ✓ Wrote KobitonBiometricModule.swift + KobitonBiometricBridge.m for iOS');
-
-      // ── Bridging Header: expose <React/RCTBridgeModule.h> to Swift ─────────
-      // RCTPromiseResolveBlock and RCTPromiseRejectBlock are ObjC types used in
-      // KobitonBiometricModule.swift. Without this import in the bridging header
-      // the Swift file cannot resolve those types and the build fails.
-      const bridgingHeaderPath = path.join(iosDir, `${iosProjectName}-Bridging-Header.h`);
-      let bridgingHeader = fs.existsSync(bridgingHeaderPath)
-        ? fs.readFileSync(bridgingHeaderPath, 'utf8')
-        : '//\n// Use this file to import your target\'s public headers that you would like to expose to Swift.\n//\n';
-      if (!bridgingHeader.includes('RCTBridgeModule')) {
-        bridgingHeader = bridgingHeader.trimEnd()
-          + '\n\n// Required for KobitonBiometricModule.swift — exposes RCTPromiseResolveBlock,\n'
-          + '// RCTPromiseRejectBlock, and other React Native ObjC types to Swift.\n'
-          + '#import <React/RCTBridgeModule.h>\n';
-        fs.writeFileSync(bridgingHeaderPath, bridgingHeader, 'utf8');
-        console.log('[KobitonSDK] ✓ Updated bridging header with <React/RCTBridgeModule.h>');
+      fs.writeFileSync(path.join(iosDir, 'KobitonBiometricModule.m'), moduleM, 'utf8');
+      // Remove stale Swift + bridge pair if they exist from an earlier prebuild
+      const staleFiles = ['KobitonBiometricModule.swift', 'KobitonBiometricBridge.m'];
+      for (const f of staleFiles) {
+        const p = path.join(iosDir, f);
+        if (fs.existsSync(p)) { fs.unlinkSync(p); }
       }
+      console.log('[KobitonSDK] ✓ Wrote KobitonBiometricModule.m (pure ObjC) for iOS');
 
       return mod;
     },
   ]);
 
-  // ── Xcode project: add generated files to the Sources Build Phase ─────────
-  // withDangerousMod only writes files to disk. Without adding them to the
-  // Xcode project's PBXSourcesBuildPhase, Xcode will not compile them —
-  // RCT_EXTERN_MODULE never executes and NativeModules.KobitonBiometricModule
-  // is null in JS.
-  //
-  // We patch project.pbxproj as text rather than using node-xcode's
-  // addSourceFile() API, which throws on null entries in generated Expo projects.
-  // Deterministic UUIDs (24 hex chars) are used so re-runs are idempotent.
+  // Step 2: Register KobitonBiometricModule.m in project.pbxproj
+  // (withDangerousMod writes to disk only; Xcode won't compile unless the file
+  // is registered in PBXFileReference + PBXBuildFile + PBXSourcesBuildPhase)
   config = withDangerousMod(config, [
     'ios',
     async (mod) => {
@@ -1798,62 +1804,43 @@ class KobitonBiometricModule: NSObject {
 
       let pbx = fs.readFileSync(pbxprojPath, 'utf8');
 
-      // Already patched — idempotent guard
-      if (pbx.includes('KobitonBiometricBridge.m')) {
-        console.log('[KobitonSDK] ✓ KobitonBiometricBridge.m already in Xcode project — skipping.');
+      // Idempotency guard — skip if already patched
+      if (pbx.includes('KobitonBiometricModule.m')) {
+        console.log('[KobitonSDK] ✓ KobitonBiometricModule.m already in Xcode project — skipping.');
         return mod;
       }
 
-      // Deterministic 24-hex-char UUIDs for our four new entries
-      const BRIDGE_BUILD_UUID = '4B544E0000000000000001AA'; // Bridge.m  → build file
-      const BRIDGE_REF_UUID   = '4B544E0000000000000002AA'; // Bridge.m  → file reference
-      const MODULE_BUILD_UUID = '4B544E0000000000000003AA'; // Module.swift → build file
-      const MODULE_REF_UUID   = '4B544E0000000000000004AA'; // Module.swift → file reference
+      // Deterministic 24-hex-char UUIDs (unchanged from prior scheme so existing
+      // builds that had the Swift+bridge pair still get unique non-colliding UUIDs)
+      const OBJC_BUILD_UUID = '4B544E0000000000000001AA'; // KobitonBiometricModule.m → build file
+      const OBJC_REF_UUID   = '4B544E0000000000000002AA'; // KobitonBiometricModule.m → file reference
 
-      // 1. PBXBuildFile section — insert two new build-file entries
-      const buildFileEntries = [
-        `\t\t${BRIDGE_BUILD_UUID} /* KobitonBiometricBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = ${BRIDGE_REF_UUID} /* KobitonBiometricBridge.m */; };`,
-        `\t\t${MODULE_BUILD_UUID} /* KobitonBiometricModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = ${MODULE_REF_UUID} /* KobitonBiometricModule.swift */; };`,
-      ].join('\n');
+      // 1. PBXBuildFile section
       pbx = pbx.replace(
         '/* Begin PBXBuildFile section */',
-        `/* Begin PBXBuildFile section */\n${buildFileEntries}`
+        `/* Begin PBXBuildFile section */\n\t\t${OBJC_BUILD_UUID} /* KobitonBiometricModule.m in Sources */ = {isa = PBXBuildFile; fileRef = ${OBJC_REF_UUID} /* KobitonBiometricModule.m */; };`
       );
 
-      // 2. PBXFileReference section — insert two new file reference entries
-      const fileRefEntries = [
-        `\t\t${BRIDGE_REF_UUID} /* KobitonBiometricBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = KobitonBiometricBridge.m; path = KobitonExpenseTracker/KobitonBiometricBridge.m; sourceTree = "<group>"; };`,
-        `\t\t${MODULE_REF_UUID} /* KobitonBiometricModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = KobitonBiometricModule.swift; path = KobitonExpenseTracker/KobitonBiometricModule.swift; sourceTree = "<group>"; };`,
-      ].join('\n');
+      // 2. PBXFileReference section
       pbx = pbx.replace(
         '/* Begin PBXFileReference section */',
-        `/* Begin PBXFileReference section */\n${fileRefEntries}`
+        `/* Begin PBXFileReference section */\n\t\t${OBJC_REF_UUID} /* KobitonBiometricModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = KobitonBiometricModule.m; path = KobitonExpenseTracker/KobitonBiometricModule.m; sourceTree = "<group>"; };`
       );
 
-      // 3. PBXGroup — add to the KobitonExpenseTracker group's children list.
-      //    Anchor: the AppDelegate.swift child line (always present).
+      // 3. PBXGroup — add beside AppDelegate.swift
       pbx = pbx.replace(
         /(\t+\w+ \/\* AppDelegate\.swift \*\/,)/,
-        [
-          '$1',
-          `\t\t\t\t${BRIDGE_REF_UUID} /* KobitonBiometricBridge.m */,`,
-          `\t\t\t\t${MODULE_REF_UUID} /* KobitonBiometricModule.swift */,`,
-        ].join('\n')
+        `$1\n\t\t\t\t${OBJC_REF_UUID} /* KobitonBiometricModule.m */,`
       );
 
-      // 4. PBXSourcesBuildPhase — add to the Sources compile list.
-      //    Anchor: the AppDelegate.swift in Sources build-file line (always present).
+      // 4. PBXSourcesBuildPhase — compile it
       pbx = pbx.replace(
         /(\t+\w+ \/\* AppDelegate\.swift in Sources \*\/,)/,
-        [
-          '$1',
-          `\t\t\t\t${BRIDGE_BUILD_UUID} /* KobitonBiometricBridge.m in Sources */,`,
-          `\t\t\t\t${MODULE_BUILD_UUID} /* KobitonBiometricModule.swift in Sources */,`,
-        ].join('\n')
+        `$1\n\t\t\t\t${OBJC_BUILD_UUID} /* KobitonBiometricModule.m in Sources */,`
       );
 
       fs.writeFileSync(pbxprojPath, pbx, 'utf8');
-      console.log('[KobitonSDK] ✓ Added KobitonBiometricBridge.m + KobitonBiometricModule.swift to Xcode project (all 4 PBX sections)');
+      console.log('[KobitonSDK] ✓ Added KobitonBiometricModule.m to Xcode project (all 4 PBX sections)');
 
       return mod;
     },
