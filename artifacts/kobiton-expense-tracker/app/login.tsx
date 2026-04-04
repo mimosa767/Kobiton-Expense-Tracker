@@ -10,6 +10,7 @@ import {
   Switch,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Controller, useForm } from 'react-hook-form';
@@ -36,6 +37,8 @@ type LoginFormData = z.infer<typeof loginSchema>;
 type BiometricState = 'idle' | 'scanning' | 'success' | 'failed';
 
 export default function LoginScreen() {
+  const { width, height } = useWindowDimensions();
+  const isLandscape = width > height;
   const { login, loginWithBiometric, isBiometricEnabled, setBiometricEnabled } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
@@ -134,171 +137,198 @@ export default function LoginScreen() {
     Platform.OS === 'web' ? Colors.textMuted :
     Colors.primary;
 
+  const cardContent = (
+    <View style={styles.card}>
+      <TouchableOpacity
+        style={[
+          styles.bioBtn,
+          isLandscape && styles.bioBtnCompact,
+          biometricState === 'scanning' && styles.bioBtnScanning,
+          biometricState === 'success' && styles.bioBtnSuccess,
+          biometricState === 'failed' && styles.bioBtnFailed,
+          Platform.OS === 'web' && styles.bioBtnWeb,
+        ]}
+        onPress={handleBiometricLogin}
+        disabled={biometricState === 'scanning' || biometricState === 'success'}
+        activeOpacity={0.8}
+        testID="biometric-login-button"
+        accessibilityRole="button"
+        accessibilityLabel="Login with biometrics"
+      >
+        <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+          <MaterialCommunityIcons
+            name={
+              biometricState === 'success' ? 'check-circle' :
+              biometricState === 'failed' ? 'close-circle' :
+              'fingerprint'
+            }
+            size={isLandscape ? 32 : 44}
+            color={iconColor}
+          />
+        </Animated.View>
+        <Text style={[styles.bioBtnLabel, { color: iconColor }]}>
+          {biometricState === 'scanning' ? 'Scanning…' :
+           biometricState === 'success' ? 'Authenticated!' :
+           biometricState === 'failed' ? 'Try Again' :
+           'Biometric Login'}
+        </Text>
+        {biometricState === 'idle' && (
+          <Text style={styles.bioBtnSub}>
+            {Platform.OS === 'web'
+              ? 'Tested via Kobiton on real devices'
+              : 'Use your fingerprint or face to sign in'}
+          </Text>
+        )}
+      </TouchableOpacity>
+
+      <View style={styles.dividerRow}>
+        <View style={styles.dividerLine} />
+        <Text style={styles.dividerText}>or sign in with password</Text>
+        <View style={styles.dividerLine} />
+      </View>
+
+      <Controller
+        control={control}
+        name="email"
+        render={({ field }) => (
+          <AppInput
+            label="Email"
+            required
+            placeholder="test@kobiton.com"
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={field.value}
+            onChangeText={field.onChange}
+            onBlur={field.onBlur}
+            error={errors.email?.message}
+            testID="login-email-input"
+          />
+        )}
+      />
+
+      <View style={{ height: Spacing.md }} />
+
+      <Controller
+        control={control}
+        name="password"
+        render={({ field }) => (
+          <AppInput
+            label="Password"
+            required
+            placeholder="••••••••"
+            isPassword
+            value={field.value}
+            onChangeText={field.onChange}
+            onBlur={field.onBlur}
+            error={errors.password?.message}
+            testID="login-password-input"
+          />
+        )}
+      />
+
+      {loginError && (
+        <View style={styles.errorBox} testID="login-error-box">
+          <Feather
+            name={Platform.OS === 'web' ? 'info' : 'alert-circle'}
+            size={14}
+            color={Platform.OS === 'web' ? Colors.accent : Colors.error}
+          />
+          <Text style={[styles.errorText, Platform.OS === 'web' && styles.infoText]} testID="login-error-text">
+            {loginError}
+          </Text>
+        </View>
+      )}
+
+      {biometricAvailable && (
+        <View style={styles.biometricRow}>
+          <Feather name="shield" size={16} color={Colors.primary} />
+          <Text style={styles.biometricLabel}>Enable Biometric on Next Login</Text>
+          <Controller
+            control={control}
+            name="enableBiometric"
+            render={({ field }) => (
+              <Switch
+                value={field.value}
+                onValueChange={field.onChange}
+                trackColor={{ false: Colors.border, true: Colors.accent }}
+                thumbColor={Colors.white}
+                testID="biometric-toggle"
+                accessibilityLabel="Enable biometric login"
+                accessibilityRole="switch"
+              />
+            )}
+          />
+        </View>
+      )}
+
+      <View style={styles.buttonRow}>
+        <AppButton
+          title="LOGIN"
+          onPress={handleSubmit(onSubmit)}
+          loading={isLoading}
+          style={styles.loginBtn}
+          testID="login-button"
+        />
+        <AppButton
+          title="SIGNUP"
+          onPress={() => setShowSignupModal(true)}
+          variant="outline"
+          style={styles.signupBtn}
+          testID="signup-button"
+        />
+      </View>
+    </View>
+  );
+
   return (
     <KeyboardAvoidingView
       style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.header}>
-          <KobitonLogo width={240} color="white" />
-          <Text style={styles.title}>EXPENSE TRACKER</Text>
-        </View>
-
-        <View style={styles.card}>
-          {/* Biometric button */}
-          <TouchableOpacity
-            style={[
-              styles.bioBtn,
-              biometricState === 'scanning' && styles.bioBtnScanning,
-              biometricState === 'success' && styles.bioBtnSuccess,
-              biometricState === 'failed' && styles.bioBtnFailed,
-              Platform.OS === 'web' && styles.bioBtnWeb,
-            ]}
-            onPress={handleBiometricLogin}
-            disabled={biometricState === 'scanning' || biometricState === 'success'}
-            activeOpacity={0.8}
-            testID="biometric-login-button"
-            accessibilityRole="button"
-            accessibilityLabel="Login with biometrics"
+      {isLandscape ? (
+        /* ── Landscape: branding left, form right ── */
+        <View style={styles.landscapeRow}>
+          <View style={styles.landscapeLeft}>
+            <KobitonLogo width={180} color="white" />
+            <Text style={styles.title}>EXPENSE TRACKER</Text>
+            <View style={styles.demoHint}>
+              <Feather name="info" size={12} color="rgba(255,255,255,0.6)" />
+              <Text style={styles.demoHintText}>Pre-filled — just tap LOGIN</Text>
+            </View>
+          </View>
+          <ScrollView
+            style={styles.landscapeRight}
+            contentContainerStyle={styles.landscapeRightContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
           >
-            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-              <MaterialCommunityIcons
-                name={
-                  biometricState === 'success' ? 'check-circle' :
-                  biometricState === 'failed' ? 'close-circle' :
-                  'fingerprint'
-                }
-                size={44}
-                color={iconColor}
-              />
-            </Animated.View>
-            <Text style={[styles.bioBtnLabel, { color: iconColor }]}>
-              {biometricState === 'scanning' ? 'Scanning…' :
-               biometricState === 'success' ? 'Authenticated!' :
-               biometricState === 'failed' ? 'Try Again' :
-               'Biometric Login'}
+            {cardContent}
+          </ScrollView>
+        </View>
+      ) : (
+        /* ── Portrait: stacked header + card ── */
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.header}>
+            <KobitonLogo width={240} color="white" />
+            <Text style={styles.title}>EXPENSE TRACKER</Text>
+          </View>
+
+          {cardContent}
+
+          <View style={styles.demoHint}>
+            <Feather name="info" size={13} color="rgba(255,255,255,0.6)" />
+            <Text style={styles.demoHintText}>
+              Credentials are pre-filled — just tap LOGIN
             </Text>
-            {biometricState === 'idle' && (
-              <Text style={styles.bioBtnSub}>
-                {Platform.OS === 'web'
-                  ? 'Tested via Kobiton on real devices'
-                  : 'Use your fingerprint or face to sign in'}
-              </Text>
-            )}
-          </TouchableOpacity>
-
-          <View style={styles.dividerRow}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or sign in with password</Text>
-            <View style={styles.dividerLine} />
           </View>
-
-          <Controller
-            control={control}
-            name="email"
-            render={({ field }) => (
-              <AppInput
-                label="Email"
-                required
-                placeholder="test@kobiton.com"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-                value={field.value}
-                onChangeText={field.onChange}
-                onBlur={field.onBlur}
-                error={errors.email?.message}
-                testID="login-email-input"
-              />
-            )}
-          />
-
-          <View style={{ height: Spacing.md }} />
-
-          <Controller
-            control={control}
-            name="password"
-            render={({ field }) => (
-              <AppInput
-                label="Password"
-                required
-                placeholder="••••••••"
-                isPassword
-                value={field.value}
-                onChangeText={field.onChange}
-                onBlur={field.onBlur}
-                error={errors.password?.message}
-                testID="login-password-input"
-              />
-            )}
-          />
-
-          {loginError && (
-            <View style={styles.errorBox} testID="login-error-box">
-              <Feather
-                name={Platform.OS === 'web' ? 'info' : 'alert-circle'}
-                size={14}
-                color={Platform.OS === 'web' ? Colors.accent : Colors.error}
-              />
-              <Text style={[styles.errorText, Platform.OS === 'web' && styles.infoText]} testID="login-error-text">
-                {loginError}
-              </Text>
-            </View>
-          )}
-
-          {biometricAvailable && (
-            <View style={styles.biometricRow}>
-              <Feather name="shield" size={16} color={Colors.primary} />
-              <Text style={styles.biometricLabel}>Enable Biometric on Next Login</Text>
-              <Controller
-                control={control}
-                name="enableBiometric"
-                render={({ field }) => (
-                  <Switch
-                    value={field.value}
-                    onValueChange={field.onChange}
-                    trackColor={{ false: Colors.border, true: Colors.accent }}
-                    thumbColor={Colors.white}
-                    testID="biometric-toggle"
-                    accessibilityLabel="Enable biometric login"
-                    accessibilityRole="switch"
-                  />
-                )}
-              />
-            </View>
-          )}
-
-          <View style={styles.buttonRow}>
-            <AppButton
-              title="LOGIN"
-              onPress={handleSubmit(onSubmit)}
-              loading={isLoading}
-              style={styles.loginBtn}
-              testID="login-button"
-            />
-            <AppButton
-              title="SIGNUP"
-              onPress={() => setShowSignupModal(true)}
-              variant="outline"
-              style={styles.signupBtn}
-              testID="signup-button"
-            />
-          </View>
-        </View>
-
-        <View style={styles.demoHint}>
-          <Feather name="info" size={13} color="rgba(255,255,255,0.6)" />
-          <Text style={styles.demoHintText}>
-            Credentials are pre-filled — just tap LOGIN
-          </Text>
-        </View>
-      </ScrollView>
+        </ScrollView>
+      )}
 
       <Modal
         visible={showSignupModal}
@@ -348,6 +378,27 @@ const styles = StyleSheet.create({
     gap: 0,
   },
 
+  landscapeRow: {
+    flex: 1,
+    flexDirection: 'row',
+  },
+  landscapeLeft: {
+    width: '38%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    paddingHorizontal: Spacing.lg,
+  },
+  landscapeRight: {
+    flex: 1,
+  },
+  landscapeRightContent: {
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    justifyContent: 'center',
+    flexGrow: 1,
+  },
+
   bioBtn: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -358,6 +409,11 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary + '30',
     backgroundColor: Colors.primary + '06',
     marginBottom: Spacing.md,
+  },
+  bioBtnCompact: {
+    paddingVertical: Spacing.sm,
+    gap: 4,
+    marginBottom: Spacing.sm,
   },
   bioBtnScanning: {
     borderColor: Colors.accent,
