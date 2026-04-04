@@ -292,10 +292,6 @@ export default function LoginScreen() {
           <View style={styles.landscapeLeft}>
             <KobitonLogo width={180} color="white" />
             <Text style={styles.title}>EXPENSE TRACKER</Text>
-            <View style={styles.demoHint}>
-              <Feather name="info" size={12} color="rgba(255,255,255,0.6)" />
-              <Text style={styles.demoHintText}>Pre-filled — just tap LOGIN</Text>
-            </View>
           </View>
           <ScrollView
             style={styles.landscapeRight}
@@ -321,12 +317,6 @@ export default function LoginScreen() {
 
           {cardContent}
 
-          <View style={styles.demoHint}>
-            <Feather name="info" size={13} color="rgba(255,255,255,0.6)" />
-            <Text style={styles.demoHintText}>
-              Credentials are pre-filled — just tap LOGIN
-            </Text>
-          </View>
         </ScrollView>
       )}
 
