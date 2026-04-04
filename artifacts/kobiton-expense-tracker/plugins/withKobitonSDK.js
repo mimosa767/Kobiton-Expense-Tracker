@@ -1742,61 +1742,61 @@ RCT_EXTERN void RCTRegisterModule(Class);
 + (NSString *)moduleName { return @"KobitonBiometricModule"; }
 
 + (void)load {
-    // 1. Register with the React Native bridge — MUST be first.
-    //    This is what RCT_EXPORT_MODULE() would have done in its +load.
-    //    Without this call NativeModules.KobitonBiometricModule is null in JS.
-    RCTRegisterModule(self);
+    // PROOF-OF-EXECUTION: absolute first line before any conditional logic.
+    // If this does NOT appear in device logs after app launch, the +load method
+    // itself is not running — file not compiled into the target binary.
+    NSLog(@"[KobitonSDK] +load method entered");
 
-    // 2. KobitonSdk (image injection) ─────────────────────────────────────────
-    //    Log the version number to confirm the camera-injection framework is
-    //    linked and loaded. If this line appears in device logs, the frame
-    //    interception layer is alive. If absent, the framework is missing.
+    // 1. Register with the React Native bridge — MUST be before any early return.
+    //    This is what RCT_EXPORT_MODULE() would have done in its own +load.
+    //    Without this, NativeModules.KobitonBiometricModule is null in JS.
+    RCTRegisterModule(self);
+    NSLog(@"[KobitonSDK] RCTRegisterModule called");
+
+    // 2. KobitonSdk version — confirms binary is linked and image injection
+    //    framework is present. If this line is absent, the framework is missing.
     NSLog(@"[KobitonSDK] KobitonSdk.framework loaded — version %.0f", KobitonSdkVersionNumber);
 
-    // 2a. TrustAgent — the local HTTP server inside KobitonSdk that the
-    //     Kobiton portal connects to for image injection commands.
-    //     Binary analysis confirms: -[TrustAgent startServer] is an instance
-    //     method and +[TrustAgent load] has a block_invoke suggesting auto-init.
-    //     We call startServer explicitly here in case the +load path is partial.
-    //     If the server is already running (from +load), a second call is safe
-    //     (GCDAsyncSocket acceptOnInterface re-entry is a no-op when listening).
-    //
-    //     Device log proof-of-connection:
-    //       "inject unsuccessfully" → server started, portal reached it, handshake failed
-    //       "inject successfully"   → full pipeline working
-    //       If neither appears, the server never started.
+    // 2a. TrustAgent — local HTTP server inside KobitonSdk.framework that the
+    //     Kobiton portal connects to (inbound) for image injection commands.
+    //     Deferred 2 seconds so the main run loop is fully alive before the
+    //     socket tries to bind. GCDAsyncSocket acceptOnInterface:port: needs
+    //     an active run loop; calling it too early in +load can silently fail.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        NSLog(@"[KobitonSDK] TrustAgent startServer dispatch fired — 2s after +load");
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-    Class trustAgentClass = NSClassFromString(@"TrustAgent");
-    if (trustAgentClass) {
-        NSLog(@"[KobitonSDK] TrustAgent class found in KobitonSdk.framework");
-        id trustAgent = [trustAgentClass new];
-        SEL startServerSel = NSSelectorFromString(@"startServer");
-        if ([trustAgent respondsToSelector:startServerSel]) {
-            [trustAgent performSelector:startServerSel];
-            NSLog(@"[KobitonSDK] TrustAgent startServer called — image injection HTTP server starting");
-        } else {
-            // Try class method in case it's a singleton accessor
-            SEL sharedSel = NSSelectorFromString(@"sharedAgent");
-            if ([trustAgentClass respondsToSelector:sharedSel]) {
-                id shared = [trustAgentClass performSelector:sharedSel];
-                if ([shared respondsToSelector:startServerSel]) {
-                    [shared performSelector:startServerSel];
-                    NSLog(@"[KobitonSDK] TrustAgent sharedAgent startServer called — image injection HTTP server starting");
-                }
+        Class trustAgentClass = NSClassFromString(@"TrustAgent");
+        if (trustAgentClass) {
+            NSLog(@"[KobitonSDK] TrustAgent class found in KobitonSdk.framework");
+            id trustAgent = [trustAgentClass new];
+            SEL startServerSel = NSSelectorFromString(@"startServer");
+            if ([trustAgent respondsToSelector:startServerSel]) {
+                id result = [trustAgent performSelector:startServerSel];
+                NSLog(@"[KobitonSDK] TrustAgent startServer result: %@", result);
             } else {
-                NSLog(@"[KobitonSDK] TrustAgent.startServer not found — server may auto-start via +load");
+                // Fallback: some SDK versions expose a singleton accessor
+                SEL sharedSel = NSSelectorFromString(@"sharedAgent");
+                if ([trustAgentClass respondsToSelector:sharedSel]) {
+                    id shared = [trustAgentClass performSelector:sharedSel];
+                    if ([shared respondsToSelector:startServerSel]) {
+                        id result = [shared performSelector:startServerSel];
+                        NSLog(@"[KobitonSDK] TrustAgent sharedAgent startServer result: %@", result);
+                    }
+                } else {
+                    NSLog(@"[KobitonSDK] TrustAgent.startServer not found — server may auto-start via +load");
+                }
             }
+        } else {
+            NSLog(@"[KobitonSDK] TrustAgent class NOT found — KobitonSdk.framework may not be embedded");
         }
-    } else {
-        NSLog(@"[KobitonSDK] TrustAgent class NOT found — KobitonSdk.framework may not be embedded");
-    }
 #pragma clang diagnostic pop
+    });
 
-    // 3. KobitonLAContext (biometric injection) ────────────────────────────────
-    //    Safely attempt configure() via ObjC runtime so the embedded GCDWebServer
-    //    starts up. The Kobiton portal connects to this server to deliver biometric
-    //    pass/fail injection signals during test sessions.
+    // 3. KobitonLAContext — biometric injection GCDWebServer.
+    //    configure() starts the server that the Kobiton portal connects to
+    //    to deliver biometric pass/fail signals during test sessions.
     NSLog(@"[KobitonSDK] KobitonBiometricModule +load — KobitonLAContext.framework present");
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
