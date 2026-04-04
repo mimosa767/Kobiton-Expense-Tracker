@@ -747,131 +747,9 @@ function withKobitonIosBiometric(config, options) {
     return mod;
   });
 
-  // Step 3: Write KobitonBiometricModule.m into ios/{appName}/ during prebuild.
-  //   This file uses KobitonLAContext instead of LAContext so Kobiton can inject
-  //   biometric pass/fail signals. It also calls [TrustAgent startServer] via the
-  //   ObjC runtime (safe no-op if the class is absent) and emits diagnostic NSLogs.
-  config = withDangerousMod(config, [
-    'ios',
-    async (mod) => {
-      const projectRoot = mod.modRequest.projectRoot;
-      const appName = mod.modRequest.projectName; // e.g. 'KobitonExpenseTracker'
-      const moduleDir = path.join(projectRoot, 'ios', appName);
-
-      if (!fs.existsSync(moduleDir)) {
-        fs.mkdirSync(moduleDir, { recursive: true });
-      }
-
-      const moduleContent = [
-        '#import <React/RCTBridgeModule.h>',
-        '#import <KobitonLAContext/KobitonLAContext.h>',
-        '#import <os/log.h>',
-        '',
-        '@interface KobitonBiometricModule : NSObject <RCTBridgeModule>',
-        '@end',
-        '',
-        '@implementation KobitonBiometricModule',
-        '',
-        'RCT_EXTERN void RCTRegisterModule(Class);',
-        '+ (NSString *)moduleName { return @"KobitonBiometricModule"; }',
-        '',
-        '+ (void)load {',
-        '    // Both NSLog (syslog/ASL) and os_log (Unified Logging System) so we capture',
-        '    // on whichever channel the Kobiton session log viewer reads.',
-        '    NSLog(@"[KobitonSDK] KobitonBiometricModule +load entered");',
-        '    os_log(OS_LOG_DEFAULT, "[KobitonSDK] KobitonBiometricModule +load entered (ULS)");',
-        '    RCTRegisterModule(self);',
-        '',
-        '    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),',
-        '                   dispatch_get_main_queue(), ^{',
-        '        Class trustAgentClass = NSClassFromString(@"TrustAgent");',
-        '        if (trustAgentClass) {',
-        '            SEL startServerSel = NSSelectorFromString(@"startServer");',
-        '            if ([trustAgentClass respondsToSelector:startServerSel]) {',
-        '                [trustAgentClass performSelector:startServerSel];',
-        '                NSLog(@"[KobitonSDK] TrustAgent startServer called");',
-        '                os_log(OS_LOG_DEFAULT, "[KobitonSDK] TrustAgent startServer called (ULS)");',
-        '            } else {',
-        '                NSLog(@"[KobitonSDK] TrustAgent found but startServer selector missing");',
-        '            }',
-        '        } else {',
-        '            NSLog(@"[KobitonSDK] TrustAgent class NOT found via NSClassFromString");',
-        '        }',
-        '    });',
-        '}',
-        '',
-        'RCT_EXPORT_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve',
-        '                  reject:(RCTPromiseRejectBlock)reject) {',
-        '    NSLog(@"[KobitonSDK] isAvailable called");',
-        '    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];',
-        '    NSError *error = nil;',
-        '    BOOL ok = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics',
-        '                               error:&error];',
-        '    NSLog(@"[KobitonSDK] isAvailable result=%@ error=%@", ok ? @"YES" : @"NO", error.localizedDescription);',
-        '    resolve(@(ok));',
-        '}',
-        '',
-        'RCT_EXPORT_METHOD(authenticate:(NSString *)reason',
-        '                  resolve:(RCTPromiseResolveBlock)resolve',
-        '                  reject:(RCTPromiseRejectBlock)reject) {',
-        '    NSLog(@"[KobitonSDK] authenticate called reason=%@", reason);',
-        '    os_log(OS_LOG_DEFAULT, "[KobitonSDK] authenticate called (ULS)");',
-        '    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];',
-        '    NSLog(@"[KobitonSDK] KobitonLAContext instance class: %@", NSStringFromClass([ctx class]));',
-        '    [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics',
-        '        localizedReason:reason',
-        '                  reply:^(BOOL success, NSError *error) {',
-        '        if (success) {',
-        '            NSLog(@"[KobitonSDK] authenticate: SUCCESS");',
-        '            os_log(OS_LOG_DEFAULT, "[KobitonSDK] authenticate SUCCESS (ULS)");',
-        '            resolve(@{@"success": @YES});',
-        '        } else {',
-        '            NSLog(@"[KobitonSDK] authenticate: FAILED code=%ld desc=%@",',
-        '                  (long)error.code, error.localizedDescription);',
-        '            os_log(OS_LOG_DEFAULT, "[KobitonSDK] authenticate FAILED (ULS)");',
-        '            reject(@"E_BIOMETRIC_ERROR", error.localizedDescription, error);',
-        '        }',
-        '    }];',
-        '}',
-        '',
-        '@end',
-      ].join('\n');
-
-      const destPath = path.join(moduleDir, 'KobitonBiometricModule.m');
-      fs.writeFileSync(destPath, moduleContent, 'utf8');
-      console.log(`[KobitonSDK] ✓ Wrote KobitonBiometricModule.m → ${destPath}`);
-
-      return mod;
-    },
-  ]);
-
-  // Step 4: Register KobitonBiometricModule.m in the Xcode project so it compiles.
-  config = withXcodeProject(config, (mod) => {
-    const xcodeProject = mod.modResults;
-    const appName = mod.modRequest.projectName;
-
-    // Only add if not already registered (idempotent)
-    const sources = xcodeProject.pbxSourcesBuildPhaseObj(xcodeProject.getFirstTarget().uuid);
-    const alreadyAdded = sources && sources.files &&
-      sources.files.some((f) => {
-        const ref = xcodeProject.pbxFileReferenceSection()[f.value];
-        return ref && ref.path && ref.path.includes('KobitonBiometricModule.m');
-      });
-
-    if (!alreadyAdded) {
-      const groupKey = xcodeProject.findPBXGroupKey({ name: appName });
-      xcodeProject.addSourceFile(
-        `${appName}/KobitonBiometricModule.m`,
-        { target: xcodeProject.getFirstTarget().uuid },
-        groupKey
-      );
-      console.log('[KobitonSDK] ✓ Registered KobitonBiometricModule.m in Xcode Sources build phase');
-    } else {
-      console.log('[KobitonSDK] ✓ KobitonBiometricModule.m already registered — skipping');
-    }
-
-    return mod;
-  });
+  // KobitonBiometricModule.m write + Xcode registration is handled entirely by
+  // withKobitonIosBiometricNativeModule (called from main withKobitonSDK function).
+  // Steps 3 and 4 removed to prevent that function from overwriting the file.
 
   return config;
 }
@@ -1921,40 +1799,28 @@ function withKobitonIosBiometricNativeModule(config, options) {
 
 @implementation KobitonBiometricModule
 
-// ── Manual inline of RCT_EXPORT_MODULE() ──────────────────────────────────────
-// We cannot use the macro because it defines +load, which would conflict with
-// our own +load below (ObjC takes the last definition — the macro's registration
-// call would be silently lost). Instead we expand the macro parts manually:
-//   1. Declare RCTRegisterModule (the external C function the bridge exposes)
-//   2. Implement +moduleName returning our JS-side module name
-//   3. Implement a SINGLE +load that calls RCTRegisterModule AND our init code
-RCT_EXTERN void RCTRegisterModule(Class);
-+ (NSString *)moduleName { return @"KobitonBiometricModule"; }
+// RCT_EXPORT_MODULE handles its own +load registration — no conflict with
+// +initialize below because +initialize fires lazily (on first use) after
+// the bridge is ready, eliminating the deadlock risk of calling
+// RCTRegisterModule inside +load before the bridge exists.
+RCT_EXPORT_MODULE(KobitonBiometricModule);
 
-+ (void)load {
-    // PROOF-OF-EXECUTION: absolute first line before any conditional logic.
-    // If this does NOT appear in device logs after app launch, the +load method
-    // itself is not running — file not compiled into the target binary.
-    NSLog(@"[KobitonSDK] +load method entered");
++ (void)initialize {
+    if (self != [KobitonBiometricModule class]) return;
+    NSLog(@"[KobitonSDK] +initialize entered");
 
-    // 1. Register with the React Native bridge — MUST be before any early return.
-    //    This is what RCT_EXPORT_MODULE() would have done in its own +load.
-    //    Without this, NativeModules.KobitonBiometricModule is null in JS.
-    RCTRegisterModule(self);
-    NSLog(@"[KobitonSDK] RCTRegisterModule called");
-
-    // 2. KobitonSdk version — confirms binary is linked and image injection
+    // 1. KobitonSdk version — confirms binary is linked and image injection
     //    framework is present. If this line is absent, the framework is missing.
     NSLog(@"[KobitonSDK] KobitonSdk.framework loaded — version %.0f", KobitonSdkVersionNumber);
 
-    // 2a. TrustAgent — local HTTP server inside KobitonSdk.framework that the
-    //     Kobiton portal connects to (inbound) for image injection commands.
-    //     Deferred 2 seconds so the main run loop is fully alive before the
-    //     socket tries to bind. GCDAsyncSocket acceptOnInterface:port: needs
-    //     an active run loop; calling it too early in +load can silently fail.
+    // 2. TrustAgent — local HTTP server inside KobitonSdk.framework that the
+    //    Kobiton portal connects to (inbound) for image injection commands.
+    //    Deferred 2 seconds so the main run loop is fully alive before the
+    //    socket tries to bind. GCDAsyncSocket acceptOnInterface:port: needs
+    //    an active run loop; calling it too early can silently fail.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        NSLog(@"[KobitonSDK] TrustAgent startServer dispatch fired — 2s after +load");
+        NSLog(@"[KobitonSDK] TrustAgent startServer dispatch fired — 2s after +initialize");
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
         Class trustAgentClass = NSClassFromString(@"TrustAgent");
@@ -1987,7 +1853,7 @@ RCT_EXTERN void RCTRegisterModule(Class);
     // 3. KobitonLAContext — biometric injection GCDWebServer.
     //    configure() starts the server that the Kobiton portal connects to
     //    to deliver biometric pass/fail signals during test sessions.
-    NSLog(@"[KobitonSDK] KobitonBiometricModule +load — KobitonLAContext.framework present");
+    NSLog(@"[KobitonSDK] KobitonBiometricModule +initialize — KobitonLAContext.framework present");
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
     SEL configureSel = NSSelectorFromString(@"configure");
