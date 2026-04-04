@@ -58,7 +58,7 @@
           "enableNetworkCapture": true,
           "enableCrashReporting": true,
           "biometricSupport": true,
-          "imageInjectionSupport": false
+          "imageInjectionSupport": true
         }
       ]
     ],
