@@ -1268,8 +1268,7 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun openCamera(promise: Promise) {
         try {
-            val activity = currentActivity
-            if (activity == null) {
+            val activity = reactApplicationContext.currentActivity ?: run {
                 Log.e(TAG, "KobitonCameraModule: openCamera — currentActivity is null")
                 promise.reject("E_NO_ACTIVITY", "No current Activity — ensure the app is in the foreground")
                 return
