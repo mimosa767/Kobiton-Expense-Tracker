@@ -2136,144 +2136,26 @@ RCT_EXPORT_METHOD(authenticate:(NSString *)reason
 //   6. Add the embed phase to the PBXNativeTarget's buildPhases list
 
 function withKobitonIosEmbedFrameworks(config, options) {
-  return withDangerousMod(config, [
-    'ios',
-    async (mod) => {
-      const projectRoot = mod.modRequest.projectRoot;
-      const pbxprojPath = path.join(
-        projectRoot, 'ios', 'KobitonExpenseTracker.xcodeproj', 'project.pbxproj'
-      );
-      if (!fs.existsSync(pbxprojPath)) {
-        console.warn('[KobitonSDK] ⚠ project.pbxproj not found — skipping framework embedding.');
-        return mod;
-      }
-
-      let pbx = fs.readFileSync(pbxprojPath, 'utf8');
-
-      // Frameworks to embed, conditional on plugin options
-      const frameworks = [];
-      if (options.biometricSupport) {
-        frameworks.push({
-          name: 'KobitonLAContext.framework',
-          path: 'KobitonFrameworks/KobitonLAContext.framework',
-          refUuid:    '4B544E0000000000000005AA',
-          linkUuid:   '4B544E0000000000000006AA',
-          embedUuid:  '4B544E0000000000000007AA',
-        });
-      }
-      if (options.imageInjectionSupport) {
-        frameworks.push({
-          name: 'KobitonSdk.framework',
-          path: 'KobitonFrameworks/KobitonSdk.framework',
-          refUuid:    '4B544E0000000000000008AA',
-          linkUuid:   '4B544E0000000000000009AA',
-          embedUuid:  '4B544E000000000000000AAA',
-        });
-      }
-
-      if (frameworks.length === 0) {
-        console.log('[KobitonSDK] ✓ No frameworks to embed (biometricSupport + imageInjectionSupport both false).');
-        return mod;
-      }
-
-      // Idempotency guard — check for Kobiton-specific UUIDs, NOT generic "Embed Frameworks"
-      // (CocoaPods already puts an "Embed Frameworks" phase in every fresh pbxproj, so a
-      // generic string check would always bail out before we add KobitonLAContext).
-      const alreadyEmbedded = frameworks.some((fw) => pbx.includes(fw.embedUuid));
-      if (alreadyEmbedded) {
-        console.log('[KobitonSDK] ✓ Kobiton frameworks already embedded — skipping.');
-        return mod;
-      }
-
-      const EMBED_PHASE_UUID = '4B544E000000000000000BAA';
-
-      // 1. PBXFileReference entries
-      const refLines = frameworks.map((fw) =>
-        `\t\t${fw.refUuid} /* ${fw.name} */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ${fw.name}; path = ${fw.path}; sourceTree = "<group>"; };`
-      ).join('\n');
-      pbx = pbx.replace(
-        '/* Begin PBXFileReference section */',
-        `/* Begin PBXFileReference section */\n${refLines}`
-      );
-
-      // 2. PBXBuildFile entries — link (Frameworks) + embed (Embed Frameworks)
-      const buildFileLines = frameworks.flatMap((fw) => [
-        `\t\t${fw.linkUuid} /* ${fw.name} in Frameworks */ = {isa = PBXBuildFile; fileRef = ${fw.refUuid} /* ${fw.name} */; };`,
-        `\t\t${fw.embedUuid} /* ${fw.name} in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = ${fw.refUuid} /* ${fw.name} */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };`,
-      ]).join('\n');
-      pbx = pbx.replace(
-        '/* Begin PBXBuildFile section */',
-        `/* Begin PBXBuildFile section */\n${buildFileLines}`
-      );
-
-      // 3. PBXFrameworksBuildPhase — add link build-file entries to the empty files list
-      const linkEntries = frameworks
-        .map((fw) => `\t\t\t\t${fw.linkUuid} /* ${fw.name} in Frameworks */,`)
-        .join('\n');
-      pbx = pbx.replace(
-        /isa = PBXFrameworksBuildPhase;[\s\S]*?files = \(\s*\);/,
-        (m) => m.replace('files = (\n\t\t\t);', `files = (\n${linkEntries}\n\t\t\t);`)
-              .replace('files = (\r\n\t\t\t);', `files = (\n${linkEntries}\n\t\t\t);`)
-              .replace(/files = \(\s*\);/, `files = (\n${linkEntries}\n\t\t\t);`)
-      );
-
-      // 4. Create PBXCopyFilesBuildPhase — the "Embed Frameworks" phase
-      const embedEntries = frameworks
-        .map((fw) => `\t\t\t\t${fw.embedUuid} /* ${fw.name} in Embed Frameworks */,`)
-        .join('\n');
-      const embedPhase = [
-        `\t\t${EMBED_PHASE_UUID} /* Embed Frameworks */ = {`,
-        `\t\t\tisa = PBXCopyFilesBuildPhase;`,
-        `\t\t\tbuildActionMask = 2147483647;`,
-        `\t\t\tdstPath = "";`,
-        `\t\t\tdstSubfolderSpec = 10;`,
-        `\t\t\tfiles = (`,
-        embedEntries,
-        `\t\t\t);`,
-        `\t\t\tname = "Embed Frameworks";`,
-        `\t\t\trunOnlyForDeploymentPostprocessing = 0;`,
-        `\t\t};`,
-      ].join('\n');
-      pbx = pbx.replace(
-        '/* Begin PBXCopyFilesBuildPhase section */',
-        `/* Begin PBXCopyFilesBuildPhase section */\n${embedPhase}`
-      );
-      // If no CopyFilesBuildPhase section exists yet, create one before PBXFrameworksBuildPhase
-      if (!pbx.includes('PBXCopyFilesBuildPhase section')) {
-        pbx = pbx.replace(
-          '/* Begin PBXFrameworksBuildPhase section */',
-          [
-            '/* Begin PBXCopyFilesBuildPhase section */',
-            embedPhase,
-            '/* End PBXCopyFilesBuildPhase section */',
-            '',
-            '/* Begin PBXFrameworksBuildPhase section */',
-          ].join('\n')
-        );
-      }
-
-      // 5. PBXNativeTarget buildPhases — add embed phase after Frameworks phase
-      //    Anchor: the Frameworks phase UUID line inside buildPhases list
-      pbx = pbx.replace(
-        /(\t+13B07F8C1A680F5B00A75B9A \/\* Frameworks \*\/,)/,
-        `$1\n\t\t\t\t${EMBED_PHASE_UUID} /* Embed Frameworks */,`
-      );
-
-      // 6. PBXGroup — add framework file refs to the KobitonExpenseTracker group
-      const groupEntries = frameworks
-        .map((fw) => `\t\t\t\t${fw.refUuid} /* ${fw.name} */,`)
-        .join('\n');
-      pbx = pbx.replace(
-        /(\t+\w+ \/\* AppDelegate\.swift \*\/,)/,
-        `$1\n${groupEntries}`
-      );
-
-      fs.writeFileSync(pbxprojPath, pbx, 'utf8');
-      console.log(`[KobitonSDK] ✓ Embedded ${frameworks.map((f) => f.name).join(' + ')} in Xcode project (Embed & Sign)`);
-
-      return mod;
-    },
-  ]);
+  return withXcodeProject(config, (mod) => {
+    const xcodeProject = mod.modResults;
+    const frameworks = [];
+    if (options.biometricSupport) {
+      frameworks.push({ name: 'KobitonLAContext.framework', path: 'KobitonFrameworks/KobitonLAContext.framework' });
+    }
+    if (options.imageInjectionSupport) {
+      frameworks.push({ name: 'KobitonSdk.framework', path: 'KobitonFrameworks/KobitonSdk.framework' });
+    }
+    for (const fw of frameworks) {
+      xcodeProject.addFramework(fw.path, {
+        customFramework: true,
+        embed: true,
+        sign: true,
+        link: true,
+      });
+      console.log(`[KobitonSDK] ✓ Embedded ${fw.name} via xcodeProject.addFramework()`);
+    }
+    return mod;
+  });
 }
 
 // ─── Main plugin ─────────────────────────────────────────────────────────────
