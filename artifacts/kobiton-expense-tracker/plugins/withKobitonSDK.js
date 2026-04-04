@@ -150,28 +150,16 @@ function withKobitonAppDelegate(config, options) {
       // The KobitonSDK CocoaPod initialization (ObjC block below) does not apply
       // to Swift AppDelegates; it is handled via Info.plist keys instead.
       if (options.biometricSupport && !modResults.contents.includes('KobitonLAContext')) {
-        // Add KobitonLAContext import after the Expo import line
+        // Add KobitonLAContext import after the Expo import line.
+        // KobitonLAContext is a drop-in subclass of LAContext — it has NO configure()
+        // class method. The framework initialises itself via ObjC +load when the
+        // dynamic linker loads it at app startup (before any Swift code runs).
+        // We just need the import so the framework is linked and loads early.
         modResults.contents = modResults.contents.replace(
           'import Expo',
-          'import Expo\nimport KobitonLAContext'
+          'import Expo\nimport KobitonLAContext // biometric injection — drop-in for LAContext'
         );
-
-        // Insert configure call before ReactNativeDelegate setup so the SDK is
-        // active before React Native initializes and any JS biometric calls fire.
-        modResults.contents = modResults.contents.replace(
-          'let delegate = ReactNativeDelegate()',
-          [
-            '// ─── Kobiton Biometric SDK ──────────────────────────────────────────────',
-            '    // KobitonLAContext.configure() must run before React Native starts so the',
-            '    // Kobiton platform can intercept all LAContext calls during test sessions.',
-            '    // Injection: driver.execute(\'mobile:biometrics-authenticate\', {result: \'passed\'})',
-            '    KobitonLAContext.configure()',
-            '    NSLog("[KobitonSDK] KobitonLAContext initialized")',
-            '',
-            '    let delegate = ReactNativeDelegate()',
-          ].join('\n')
-        );
-        console.log('[KobitonSDK] ✓ Patched Swift AppDelegate with KobitonLAContext.configure()');
+        console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — added import KobitonLAContext');
       }
     } else {
       // ── ObjC AppDelegate (Expo SDK < 52) ──────────────────────────────────
@@ -191,13 +179,9 @@ function withKobitonAppDelegate(config, options) {
     [KobitonSDK shared].networkCaptureEnabled = [kobitonInfo[@"KobitonEnableNetworkCapture"] boolValue];
     [KobitonSDK shared].crashReportingEnabled = [kobitonInfo[@"KobitonEnableCrashReporting"] boolValue];
     NSLog(@"[Kobiton] SDK initialized (v%@)", [KobitonSDK version]);
-  }${options.biometricSupport ? `
-  // ─── Kobiton Biometric SDK ────────────────────────────────────────────────
-  // KobitonLAContext is a drop-in replacement for LAContext.
-  // When active, the Kobiton platform can inject biometric pass/fail signals
-  // remotely via: driver.execute('mobile:biometrics-authenticate', {result: 'passed'})
-  [KobitonLAContext configure];
-  NSLog(@"[Kobiton] Biometric SDK (KobitonLAContext) active");` : ''}`;
+  }
+  // KobitonLAContext is a LAContext subclass — no configure() method exists.
+  // It self-initialises via +load when the dynamic linker loads it at startup.`;
 
         modResults.contents = modResults.contents.replace(
           '#import "AppDelegate.h"',
