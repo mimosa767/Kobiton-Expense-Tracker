@@ -1057,7 +1057,7 @@ function withKobitonAndroidBiometric(config, options) {
  * on Kobiton sessions (main Looper not prepared on the callback thread).
  */
 function withKobitonAndroidBiometricNativeModule(config, _options) {
-  return withDangerousMod(config, [
+  config = withDangerousMod(config, [
     'android',
     async (mod) => {
       const projectRoot = mod.modRequest.projectRoot;
@@ -1184,7 +1184,338 @@ class KobitonBiometricModule(reactContext: ReactApplicationContext) :
 }
 `;
 
-      // ── KobitonBiometricPackage.kt ────────────────────────────────────────
+      // ── KobitonCameraModule.kt ────────────────────────────────────────────
+      const cameraModuleKt = `package com.kobiton.expensetracker
+
+import android.app.Activity
+import android.content.Intent
+import android.util.Log
+
+import com.facebook.react.bridge.ActivityEventListener
+import com.facebook.react.bridge.BaseActivityEventListener
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+
+/**
+ * React Native native module that launches KobitonCameraActivity and resolves
+ * a Promise with the captured photo URI (file:// string).
+ *
+ * JS-side: NativeModules.KobitonCameraModule.openCamera() → Promise<string>
+ *
+ * KobitonCameraActivity uses kobiton.hardware.camera2 classes internally,
+ * which allows the Kobiton platform to inject synthetic camera frames during
+ * test sessions — no physical camera interaction required.
+ */
+class KobitonCameraModule(reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext) {
+
+    companion object {
+        private const val TAG = "[KobitonSDK]"
+        private const val CAMERA_REQUEST_CODE = 9001
+    }
+
+    private var pendingPromise: Promise? = null
+
+    private val activityEventListener: ActivityEventListener =
+        object : BaseActivityEventListener() {
+            override fun onActivityResult(
+                activity: Activity,
+                requestCode: Int,
+                resultCode: Int,
+                data: Intent?
+            ) {
+                if (requestCode != CAMERA_REQUEST_CODE) return
+                val promise = pendingPromise ?: run {
+                    Log.w(TAG, "KobitonCameraModule: onActivityResult fired with no pending promise — ignored")
+                    return
+                }
+                pendingPromise = null
+                when (resultCode) {
+                    Activity.RESULT_OK -> {
+                        val uri = data?.getStringExtra(KobitonCameraActivity.EXTRA_PHOTO_URI)
+                        if (uri != null) {
+                            Log.d(TAG, "KobitonCameraModule: photo received — \$uri")
+                            promise.resolve(uri)
+                        } else {
+                            Log.e(TAG, "KobitonCameraModule: RESULT_OK but EXTRA_PHOTO_URI missing")
+                            promise.reject("E_NO_URI", "Camera returned RESULT_OK but no photo URI was provided")
+                        }
+                    }
+                    Activity.RESULT_CANCELED -> {
+                        Log.d(TAG, "KobitonCameraModule: RESULT_CANCELED — user cancelled or activity error")
+                        promise.reject("E_CANCELLED", "Camera was cancelled")
+                    }
+                    else -> {
+                        Log.e(TAG, "KobitonCameraModule: unexpected resultCode=\$resultCode")
+                        promise.reject("E_UNKNOWN", "Unexpected camera result code: \$resultCode")
+                    }
+                }
+            }
+        }
+
+    init {
+        reactContext.addActivityEventListener(activityEventListener)
+        Log.d(TAG, "KobitonCameraModule: ActivityEventListener registered")
+    }
+
+    override fun getName(): String {
+        Log.d(TAG, "KobitonCameraModule loaded")
+        return "KobitonCameraModule"
+    }
+
+    @ReactMethod
+    fun openCamera(promise: Promise) {
+        try {
+            val activity = currentActivity
+            if (activity == null) {
+                Log.e(TAG, "KobitonCameraModule: openCamera — currentActivity is null")
+                promise.reject("E_NO_ACTIVITY", "No current Activity — ensure the app is in the foreground")
+                return
+            }
+            Log.d(TAG, "KobitonCameraModule: launching KobitonCameraActivity")
+            pendingPromise = promise
+            val intent = Intent(activity, KobitonCameraActivity::class.java)
+            activity.startActivityForResult(intent, CAMERA_REQUEST_CODE)
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraModule: openCamera exception — \${e.javaClass.name}: \${e.message}", e)
+            pendingPromise = null
+            promise.reject("E_CAMERA_ERROR", e.message ?: "Unknown error launching camera")
+        }
+    }
+}
+`;
+
+      // ── KobitonCameraActivity.kt ──────────────────────────────────────────
+      const cameraActivityKt = `package com.kobiton.expensetracker
+
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Color
+import android.graphics.ImageFormat
+import android.graphics.SurfaceTexture
+import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
+import android.util.Log
+import android.view.Gravity
+import android.view.Surface
+import android.view.TextureView
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
+
+import kobiton.hardware.camera2.CameraDevice
+import kobiton.hardware.camera2.CameraManager
+import kobiton.hardware.camera2.CameraCaptureSession
+import kobiton.hardware.camera2.CaptureRequest
+import kobiton.media.ImageReader
+
+/**
+ * Native camera activity using kobiton.hardware.camera2 classes.
+ *
+ * Uses CameraManager.getInstance(context) instead of
+ * context.getSystemService(Context.CAMERA_SERVICE) so the Kobiton platform
+ * can intercept and inject synthetic camera frames during test sessions.
+ *
+ * Returns RESULT_OK + Intent extra EXTRA_PHOTO_URI on success.
+ * Returns RESULT_CANCELED on user cancel or any unrecoverable error.
+ */
+class KobitonCameraActivity : AppCompatActivity() {
+
+    companion object {
+        private const val TAG = "[KobitonSDK]"
+        const val EXTRA_PHOTO_URI = "photoUri"
+        private const val CAPTURE_WIDTH  = 1280
+        private const val CAPTURE_HEIGHT = 720
+    }
+
+    private lateinit var textureView: TextureView
+    private var kobitonCameraDevice: CameraDevice? = null
+    private var kobitonCaptureSession: CameraCaptureSession? = null
+    private var kobitonImageReader: ImageReader? = null
+    private var backgroundThread: HandlerThread? = null
+    private var backgroundHandler: Handler? = null
+    private var isCapturing = false
+
+    private val surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+        override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+            Log.d(TAG, "KobitonCameraActivity: surface ready (\${width}x\${height})")
+            openCamera()
+        }
+        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
+        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+    }
+
+    private val cameraStateCallback = object : CameraDevice.StateCallback() {
+        override fun onOpened(camera: CameraDevice) {
+            Log.d(TAG, "KobitonCameraActivity: CameraDevice.onOpened")
+            kobitonCameraDevice = camera
+            startPreview()
+        }
+        override fun onDisconnected(camera: CameraDevice) {
+            Log.w(TAG, "KobitonCameraActivity: CameraDevice.onDisconnected")
+            camera.close(); kobitonCameraDevice = null
+        }
+        override fun onError(camera: CameraDevice, error: Int) {
+            Log.e(TAG, "KobitonCameraActivity: CameraDevice.onError code=\$error")
+            camera.close(); kobitonCameraDevice = null
+            finishCancelled("Camera device error: \$error")
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        Log.d(TAG, "KobitonCameraActivity: onCreate")
+        buildLayout()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        startBackgroundThread()
+        if (textureView.isAvailable) openCamera()
+        else textureView.surfaceTextureListener = surfaceTextureListener
+    }
+
+    override fun onPause() {
+        closeCamera(); stopBackgroundThread(); super.onPause()
+    }
+
+    private fun buildLayout() {
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+        textureView = TextureView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        }
+        root.addView(textureView)
+        val cancelBtn = TextView(this).apply {
+            text = "✕"; textSize = 20f; setTextColor(Color.WHITE)
+            setBackgroundColor(0xAA000000.toInt()); setPadding(40, 28, 40, 28)
+            gravity = Gravity.CENTER; isClickable = true; isFocusable = true
+            contentDescription = "Cancel"
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).also {
+                it.gravity = Gravity.TOP or Gravity.START; it.setMargins(40, 100, 0, 0)
+            }
+        }
+        cancelBtn.setOnClickListener { Log.d(TAG, "KobitonCameraActivity: cancel pressed"); finishCancelled("User cancelled") }
+        root.addView(cancelBtn)
+        val captureBtn = TextView(this).apply {
+            text = "⬤"; textSize = 52f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
+            isClickable = true; isFocusable = true; contentDescription = "Take photo"
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).also {
+                it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; it.bottomMargin = 100
+            }
+        }
+        captureBtn.setOnClickListener { takePhoto() }
+        root.addView(captureBtn)
+        setContentView(root)
+    }
+
+    private fun startBackgroundThread() {
+        backgroundThread = HandlerThread("KobitonCameraBg").also { it.start() }
+        backgroundHandler = Handler(backgroundThread!!.looper)
+    }
+
+    private fun stopBackgroundThread() {
+        backgroundThread?.quitSafely()
+        try { backgroundThread?.join() } catch (e: InterruptedException) { Log.e(TAG, "stopBackgroundThread interrupted", e) }
+        backgroundThread = null; backgroundHandler = null
+    }
+
+    private fun openCamera() {
+        try {
+            Log.d(TAG, "KobitonCameraActivity: calling kobiton.hardware.camera2.CameraManager.getInstance()")
+            val manager: CameraManager = CameraManager.getInstance(this)
+            val cameraIds = manager.getCameraIdList()
+            if (cameraIds.isEmpty()) { finishCancelled("No cameras available"); return }
+            val cameraId = cameraIds[0]
+            Log.d(TAG, "KobitonCameraActivity: opening camera id=\$cameraId")
+            manager.openCamera(cameraId, cameraStateCallback, backgroundHandler)
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraActivity: openCamera failed — \${e.javaClass.name}: \${e.message}", e)
+            finishCancelled("Failed to open camera: \${e.message}")
+        }
+    }
+
+    private fun startPreview() {
+        val camera = kobitonCameraDevice ?: return
+        val st = textureView.surfaceTexture ?: run { Log.e(TAG, "startPreview: surfaceTexture null"); return }
+        try {
+            st.setDefaultBufferSize(CAPTURE_WIDTH, CAPTURE_HEIGHT)
+            val previewSurface = Surface(st)
+            kobitonImageReader = ImageReader.newInstance(CAPTURE_WIDTH, CAPTURE_HEIGHT, ImageFormat.JPEG, 2)
+            val previewRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(previewSurface) }
+            camera.createCaptureSession(listOf(previewSurface, kobitonImageReader!!.surface), object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    Log.d(TAG, "KobitonCameraActivity: CaptureSession configured — starting preview")
+                    kobitonCaptureSession = session
+                    try { session.setRepeatingRequest(previewRequest.build(), null, backgroundHandler) }
+                    catch (e: Exception) { Log.e(TAG, "setRepeatingRequest failed: \${e.message}", e) }
+                }
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    Log.e(TAG, "KobitonCameraActivity: CaptureSession.onConfigureFailed")
+                    finishCancelled("Camera session configuration failed")
+                }
+            }, backgroundHandler)
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraActivity: startPreview failed — \${e.message}", e)
+            finishCancelled("Failed to start preview: \${e.message}")
+        }
+    }
+
+    private fun takePhoto() {
+        if (isCapturing) return
+        val camera  = kobitonCameraDevice  ?: run { Log.e(TAG, "takePhoto: cameraDevice null");   return }
+        val session = kobitonCaptureSession ?: run { Log.e(TAG, "takePhoto: captureSession null"); return }
+        val reader  = kobitonImageReader   ?: run { Log.e(TAG, "takePhoto: imageReader null");    return }
+        isCapturing = true
+        Log.d(TAG, "KobitonCameraActivity: takePhoto — attaching ImageReader listener")
+        reader.setOnImageAvailableListener({ imgReader ->
+            val image = imgReader.acquireLatestImage()
+            if (image == null) { Log.e(TAG, "acquireLatestImage null"); isCapturing = false; return@setOnImageAvailableListener }
+            try {
+                val buffer = image.planes[0].buffer
+                val bytes = ByteArray(buffer.remaining()); buffer.get(bytes); image.close()
+                val photoFile = java.io.File(cacheDir, "kobiton_receipt_\${System.currentTimeMillis()}.jpg")
+                java.io.FileOutputStream(photoFile).use { it.write(bytes) }
+                val uri = "file://\${photoFile.absolutePath}"
+                Log.d(TAG, "KobitonCameraActivity: photo saved → \$uri (\${bytes.size} bytes)")
+                runOnUiThread { setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_PHOTO_URI, uri)); finish() }
+            } catch (e: Exception) {
+                Log.e(TAG, "KobitonCameraActivity: image save failed — \${e.message}", e)
+                isCapturing = false; runOnUiThread { finishCancelled("Failed to save photo: \${e.message}") }
+            }
+        }, backgroundHandler)
+        try {
+            val captureRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply { addTarget(reader.surface) }
+            session.capture(captureRequest.build(), null, backgroundHandler)
+            Log.d(TAG, "KobitonCameraActivity: still capture request sent")
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraActivity: capture failed — \${e.message}", e); isCapturing = false
+            finishCancelled("Failed to capture: \${e.message}")
+        }
+    }
+
+    private fun closeCamera() {
+        try { kobitonCaptureSession?.close(); kobitonCaptureSession = null
+              kobitonCameraDevice?.close();   kobitonCameraDevice = null
+              kobitonImageReader?.close();    kobitonImageReader = null
+        } catch (e: Exception) { Log.e(TAG, "closeCamera error: \${e.message}", e) }
+    }
+
+    private fun finishCancelled(reason: String = "cancelled") {
+        Log.w(TAG, "KobitonCameraActivity: finishing RESULT_CANCELED — \$reason")
+        setResult(Activity.RESULT_CANCELED); finish()
+    }
+}
+`;
+
+      // ── KobitonPackage.kt ─────────────────────────────────────────────────
       const packageKt = `package com.kobiton.expensetracker
 
 import com.facebook.react.ReactPackage
@@ -1193,13 +1524,18 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 
 /**
- * ReactPackage that registers KobitonBiometricModule.
+ * ReactPackage that registers all Kobiton native modules:
+ *   KobitonBiometricModule — biometric authentication via kobiton.biometric
+ *   KobitonCameraModule    — camera capture via kobiton.hardware.camera2
  * Added to MainApplication.kt by the withKobitonSDK Expo config plugin.
  */
-class KobitonBiometricPackage : ReactPackage {
+class KobitonPackage : ReactPackage {
     override fun createNativeModules(
         reactContext: ReactApplicationContext
-    ): List<NativeModule> = listOf(KobitonBiometricModule(reactContext))
+    ): List<NativeModule> = listOf(
+        KobitonBiometricModule(reactContext),
+        KobitonCameraModule(reactContext)
+    )
 
     override fun createViewManagers(
         reactContext: ReactApplicationContext
@@ -1208,24 +1544,35 @@ class KobitonBiometricPackage : ReactPackage {
 `;
 
       fs.writeFileSync(path.join(javaDir, 'KobitonBiometricModule.kt'), moduleKt, 'utf8');
-      fs.writeFileSync(path.join(javaDir, 'KobitonBiometricPackage.kt'), packageKt, 'utf8');
-      console.log('[KobitonSDK] ✓ Wrote KobitonBiometricModule.kt + KobitonBiometricPackage.kt');
+      fs.writeFileSync(path.join(javaDir, 'KobitonCameraModule.kt'), cameraModuleKt, 'utf8');
+      fs.writeFileSync(path.join(javaDir, 'KobitonCameraActivity.kt'), cameraActivityKt, 'utf8');
+      fs.writeFileSync(path.join(javaDir, 'KobitonPackage.kt'), packageKt, 'utf8');
+      // Remove stale KobitonBiometricPackage.kt if it still exists from a previous prebuild
+      const oldPkgPath = path.join(javaDir, 'KobitonBiometricPackage.kt');
+      if (fs.existsSync(oldPkgPath)) {
+        fs.unlinkSync(oldPkgPath);
+        console.log('[KobitonSDK] ✓ Removed stale KobitonBiometricPackage.kt (replaced by KobitonPackage.kt)');
+      }
+      console.log('[KobitonSDK] ✓ Wrote KobitonBiometricModule.kt + KobitonCameraModule.kt + KobitonCameraActivity.kt + KobitonPackage.kt');
 
-      // ── Patch MainApplication.kt to register KobitonBiometricPackage ──────
+      // ── Patch MainApplication.kt to register KobitonPackage ───────────────
       const mainAppPath = path.join(javaDir, 'MainApplication.kt');
       if (fs.existsSync(mainAppPath)) {
         let src = fs.readFileSync(mainAppPath, 'utf8');
-        if (!src.includes('KobitonBiometricPackage')) {
-          // Insert add(KobitonBiometricPackage()) inside the getPackages apply block.
-          // Expo template: PackageList(this).packages.apply { ... }
+        // Migrate old KobitonBiometricPackage() reference to KobitonPackage()
+        if (src.includes('KobitonBiometricPackage()')) {
+          src = src.replace('KobitonBiometricPackage()', 'KobitonPackage()');
+          fs.writeFileSync(mainAppPath, src, 'utf8');
+          console.log('[KobitonSDK] ✓ Migrated MainApplication.kt: KobitonBiometricPackage() → KobitonPackage()');
+        } else if (!src.includes('KobitonPackage')) {
           src = src.replace(
             /PackageList\(this\)\.packages\.apply\s*\{/,
-            `PackageList(this).packages.apply {\n              add(KobitonBiometricPackage())`
+            `PackageList(this).packages.apply {\n              add(KobitonPackage())`
           );
           fs.writeFileSync(mainAppPath, src, 'utf8');
-          console.log('[KobitonSDK] ✓ Patched MainApplication.kt — added KobitonBiometricPackage()');
+          console.log('[KobitonSDK] ✓ Patched MainApplication.kt — added KobitonPackage()');
         } else {
-          console.log('[KobitonSDK] ✓ MainApplication.kt already contains KobitonBiometricPackage — skipping patch.');
+          console.log('[KobitonSDK] ✓ MainApplication.kt already contains KobitonPackage — skipping patch.');
         }
       } else {
         console.warn('[KobitonSDK] ⚠ MainApplication.kt not found at expected path — run expo prebuild first, then rebuild.');
@@ -1234,6 +1581,35 @@ class KobitonBiometricPackage : ReactPackage {
       return mod;
     },
   ]);
+
+  // Register KobitonCameraActivity in AndroidManifest.xml so the system can start it.
+  // The activity is not exported (only launchable via explicit intent from KobitonCameraModule).
+  config = withAndroidManifest(config, (mod) => {
+    const manifest = mod.modResults.manifest;
+    const app = manifest.application?.[0];
+    if (app) {
+      app.activity = app.activity ?? [];
+      const activityName = 'com.kobiton.expensetracker.KobitonCameraActivity';
+      const activityShort = '.KobitonCameraActivity';
+      if (!app.activity.some((a) => {
+        const n = a.$?.['android:name'];
+        return n === activityName || n === activityShort;
+      })) {
+        app.activity.push({
+          $: {
+            'android:name': activityName,
+            'android:screenOrientation': 'portrait',
+            'android:theme': '@style/Theme.AppCompat.NoActionBar',
+            'android:exported': 'false',
+          },
+        });
+        console.log('[KobitonSDK] ✓ Registered KobitonCameraActivity in AndroidManifest.xml');
+      }
+    }
+    return mod;
+  });
+
+  return config;
 }
 
 // ─── iOS: Biometric Native Module ─────────────────────────────────────────────

@@ -1,6 +1,7 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  NativeModules,
   Platform,
   StyleSheet,
   Text,
@@ -12,11 +13,13 @@ import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { callCameraCallback, clearCameraCallback } from '@/src/utils/cameraCallback';
 
+// Vision Camera is only used on iOS — on Android we delegate to the
+// native KobitonCameraActivity via KobitonCameraModule.
 let Camera: any = null;
 let useCameraDevice: any = null;
 let useCameraPermission: any = null;
 
-if (Platform.OS !== 'web') {
+if (Platform.OS === 'ios') {
   const visionCamera = require('react-native-vision-camera');
   Camera = visionCamera.Camera;
   useCameraDevice = visionCamera.useCameraDevice;
@@ -31,20 +34,101 @@ const Colors = {
   overlay: 'rgba(0,0,0,0.5)',
 };
 
+// ─── Web fallback ──────────────────────────────────────────────────────────────
+
 function WebFallback() {
   const router = useRouter();
   return (
     <View style={styles.fallback}>
       <Feather name="camera-off" size={48} color={Colors.white} />
       <Text style={styles.fallbackText}>Camera is not available on web</Text>
-      <TouchableOpacity style={styles.fallbackBtn} onPress={() => { clearCameraCallback(); router.back(); }}>
+      <TouchableOpacity
+        style={styles.fallbackBtn}
+        onPress={() => { clearCameraCallback(); router.back(); }}
+      >
         <Text style={styles.fallbackBtnText}>Go Back</Text>
       </TouchableOpacity>
     </View>
   );
 }
 
-function NativeCamera() {
+// ─── Android: delegate to KobitonCameraActivity via KobitonCameraModule ────────
+
+/**
+ * On Android, immediately launches the native KobitonCameraActivity via
+ * NativeModules.KobitonCameraModule.openCamera(). That activity uses
+ * kobiton.hardware.camera2.CameraManager instead of the stock Android
+ * camera2 manager, which lets the Kobiton platform inject synthetic frames
+ * during test sessions.
+ *
+ * While the activity is open this screen shows a loading indicator.
+ * When the activity finishes it resolves the promise with a file:// URI
+ * (or rejects with E_CANCELLED), at which point we fire the callback and
+ * navigate back.
+ */
+function AndroidKobitonCamera() {
+  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
+  const launched = useRef(false);
+
+  useEffect(() => {
+    if (launched.current) return;
+    launched.current = true;
+
+    const mod = NativeModules.KobitonCameraModule;
+    if (!mod) {
+      console.error('[CameraScreen] KobitonCameraModule not available — NativeModules:', Object.keys(NativeModules));
+      setError('KobitonCameraModule is not registered.\nRun expo prebuild and rebuild the app.');
+      return;
+    }
+
+    mod.openCamera()
+      .then((uri: string) => {
+        console.log('[CameraScreen] KobitonCameraModule.openCamera resolved →', uri);
+        const fileName = `receipt_${Date.now()}.jpg`;
+        callCameraCallback(uri, fileName);
+        router.back();
+      })
+      .catch((err: any) => {
+        const code: string = err?.code ?? '';
+        if (code === 'E_CANCELLED') {
+          // User tapped the cancel button in KobitonCameraActivity — silent dismiss
+          console.log('[CameraScreen] KobitonCameraModule: user cancelled');
+        } else {
+          console.error('[CameraScreen] KobitonCameraModule.openCamera rejected:', err);
+        }
+        clearCameraCallback();
+        router.back();
+      });
+  }, [router]);
+
+  if (error) {
+    return (
+      <View style={styles.permissionContainer}>
+        <Feather name="alert-triangle" size={40} color={Colors.error} />
+        <Text style={[styles.permissionText, { color: Colors.error }]}>{error}</Text>
+        <TouchableOpacity
+          style={[styles.permissionBtn, styles.cancelBtn]}
+          onPress={() => { clearCameraCallback(); router.back(); }}
+        >
+          <Text style={styles.permissionBtnText}>Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Loading screen shown while KobitonCameraActivity is open on top
+  return (
+    <View style={styles.permissionContainer}>
+      <ActivityIndicator color={Colors.white} size="large" />
+      <Text style={styles.permissionText}>Opening camera…</Text>
+    </View>
+  );
+}
+
+// ─── iOS: Vision Camera ────────────────────────────────────────────────────────
+
+function IosVisionCamera() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const cameraRef = useRef<any>(null);
@@ -62,9 +146,7 @@ function NativeCamera() {
         flash: 'off',
         enableShutterSound: true,
       });
-      const uri = Platform.OS === 'android'
-        ? `file://${photo.path}`
-        : photo.path;
+      const uri = photo.path;
       const fileName = `receipt_${Date.now()}.jpg`;
       callCameraCallback(uri, fileName);
       router.back();
@@ -146,10 +228,15 @@ function NativeCamera() {
   );
 }
 
+// ─── Root export ───────────────────────────────────────────────────────────────
+
 export default function CameraScreen() {
-  if (Platform.OS === 'web') return <WebFallback />;
-  return <NativeCamera />;
+  if (Platform.OS === 'web')     return <WebFallback />;
+  if (Platform.OS === 'android') return <AndroidKobitonCamera />;
+  return <IosVisionCamera />;
 }
+
+// ─── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   container: {
