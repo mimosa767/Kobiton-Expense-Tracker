@@ -138,6 +138,14 @@ function IosVisionCamera() {
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice(facing);
 
+  // Auto-request permission on mount so the OS prompt fires immediately
+  // and the Kobiton platform can intercept it — no manual "Grant" tap needed.
+  useEffect(() => {
+    if (!hasPermission) {
+      requestPermission();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleCapture = useCallback(async () => {
     if (!cameraRef.current || capturing) return;
     try {
@@ -165,39 +173,29 @@ function IosVisionCamera() {
     setFacing(f => f === 'back' ? 'front' : 'back');
   }, []);
 
-  if (!hasPermission) {
-    return (
-      <View style={styles.permissionContainer}>
-        <Feather name="camera-off" size={48} color={Colors.white} />
-        <Text style={styles.permissionText}>Camera permission is required to take photos.</Text>
-        <TouchableOpacity style={styles.permissionBtn} onPress={requestPermission}>
-          <Text style={styles.permissionBtnText}>Grant Permission</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.permissionBtn, styles.cancelBtn]} onPress={handleCancel}>
-          <Text style={styles.permissionBtnText}>Cancel</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  if (!device) {
-    return (
-      <View style={styles.permissionContainer}>
-        <ActivityIndicator color={Colors.white} size="large" />
-        <Text style={styles.permissionText}>Loading camera…</Text>
-      </View>
-    );
-  }
+  // Pre-checks removed for iOS — Kobiton's image injection SDK intercepts at
+  // the AVCaptureSession level. Blocking on !hasPermission or !device would
+  // prevent the camera session from ever starting, which is the same issue
+  // we fixed on the biometric side with isEnrolledAsync().
+  // The <Camera> component is rendered conditionally on device so Vision Camera
+  // does not crash — it mounts as soon as device resolves (immediately on a
+  // real or Kobiton-managed device once permission is auto-requested above).
 
   return (
     <View style={styles.container}>
-      <Camera
-        ref={cameraRef}
-        style={StyleSheet.absoluteFill}
-        device={device}
-        isActive={true}
-        photo={true}
-      />
+      {device ? (
+        <Camera
+          ref={cameraRef}
+          style={StyleSheet.absoluteFill}
+          device={device}
+          isActive={true}
+          photo={true}
+        />
+      ) : (
+        // device resolves once permission is granted (auto-requested on mount).
+        // Renders a black background; Kobiton injects frames once AVCaptureSession starts.
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: Colors.black }]} />
+      )}
 
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={handleCancel} style={styles.iconBtn} accessibilityLabel="Cancel">
