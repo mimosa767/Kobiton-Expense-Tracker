@@ -146,20 +146,45 @@ function withKobitonAppDelegate(config, options) {
 
     if (isSwift) {
       // ── Swift AppDelegate (Expo SDK 52+) ─────────────────────────────────
-      // Only biometric support needs patching here — add import + configure call.
-      // The KobitonSDK CocoaPod initialization (ObjC block below) does not apply
-      // to Swift AppDelegates; it is handled via Info.plist keys instead.
       if (options.biometricSupport && !modResults.contents.includes('KobitonLAContext')) {
-        // Add KobitonLAContext import after the Expo import line.
-        // KobitonLAContext is a drop-in subclass of LAContext — it has NO configure()
-        // class method. The framework initialises itself via ObjC +load when the
-        // dynamic linker loads it at app startup (before any Swift code runs).
-        // We just need the import so the framework is linked and loads early.
+        // 1. Add import so the framework is linked and the type is accessible.
         modResults.contents = modResults.contents.replace(
           'import Expo',
           'import Expo\nimport KobitonLAContext // biometric injection — drop-in for LAContext'
         );
-        console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — added import KobitonLAContext');
+
+        // 2. Call KobitonLAContext.configure() at app launch via ObjC runtime.
+        //    configure() is not declared in the public header, so we probe at
+        //    runtime with respondsToSelector — safe whether it exists or not.
+        //    This starts the embedded GCDWebServer that the Kobiton portal
+        //    connects to for biometric pass/fail injection signals.
+        //    The print line is the device-log proof-of-execution the Kobiton
+        //    team looks for to confirm the SDK initialised before the test runs.
+        const configureBlock = `
+    // ── Kobiton Biometric SDK initialisation ──────────────────────────────
+    // configure() starts the embedded GCDWebServer inside KobitonLAContext.framework.
+    // The Kobiton portal connects to this server to inject biometric signals.
+    // Called via ObjC runtime because the public header does not declare it.
+    if let kobitonClass = NSClassFromString("KobitonLAContext") as? NSObject.Type {
+      let configureSel = NSSelectorFromString("configure")
+      if kobitonClass.responds(to: configureSel) {
+        kobitonClass.perform(configureSel)
+        print("[KobitonSDK] configure called")
+      } else {
+        print("[KobitonSDK] configure not found — KobitonLAContext self-initialises")
+      }
+    } else {
+      print("[KobitonSDK] KobitonLAContext class not found — framework not loaded")
+    }`;
+
+        // Insert the block at the very start of didFinishLaunchingWithOptions,
+        // before any React Native factory setup, so the SDK is alive before JS runs.
+        modResults.contents = modResults.contents.replace(
+          'let delegate = ReactNativeDelegate()',
+          `${configureBlock}\n\n    let delegate = ReactNativeDelegate()`
+        );
+
+        console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — import + configure() call');
       }
     } else {
       // ── ObjC AppDelegate (Expo SDK < 52) ──────────────────────────────────
