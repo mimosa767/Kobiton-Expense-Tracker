@@ -21,9 +21,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     async function init() {
-      const s = await authService.getSession();
+      // Always start logged-out so the Kobiton portal can deterministically
+      // trigger biometric injection from the login screen.
+      // A session restored from AsyncStorage would skip the login screen
+      // entirely, making the biometric demo non-repeatable.
+      // Biometric preference is preserved (persists across sessions).
+      await authService.logout();
       const bio = await authService.isBiometricEnabled();
-      setSession(s);
+      setSession(null);
       setIsBiometricEnabledState(bio);
       setIsLoading(false);
     }
