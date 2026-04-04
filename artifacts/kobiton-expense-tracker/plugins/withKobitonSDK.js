@@ -2279,6 +2279,7 @@ function withKobitonIosEmbedFrameworks(config, options) {
 // ─── Main plugin ─────────────────────────────────────────────────────────────
 
 const withKobitonSDK = (config, options = {}) => {
+  console.log('KOBITON PLUGIN EXECUTING — options:', JSON.stringify(options));
   config = withKobitonPod(config);
   config = withKobitonInfoPlist(config, options);
   config = withKobitonAppDelegate(config, options);
