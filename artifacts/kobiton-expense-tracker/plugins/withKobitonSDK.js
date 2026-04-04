@@ -27,9 +27,9 @@
  *
  * iOS:
  *   • Biometric SDK (biometricSupport):
- *       – Generates KobitonBiometricModule.swift + KobitonBiometricBridge.m
- *         (calls KobitonLAContext() directly instead of LAContext() so Kobiton
- *          can intercept biometric calls — expo-local-authentication cannot be intercepted)
+ *       – Generates KobitonBiometricModule.m (pure ObjC, single file)
+ *         Uses KobitonLAContext() instead of LAContext() so Kobiton can inject
+ *         biometric pass/fail signals — expo-local-authentication cannot be intercepted
  *
  * Usage in app.json:
  *   "plugins": [
@@ -1693,40 +1693,54 @@ function withKobitonIosBiometricNativeModule(config, options) {
  *
  * All log lines carry the [KobitonSDK] prefix so they are searchable in the
  * Kobiton device session log viewer.
+ *
+ * WHY RCT_EXPORT_MODULE() IS NOT USED DIRECTLY:
+ *   RCT_EXPORT_MODULE() expands to define +(void)load { RCTRegisterModule(self); }.
+ *   If we also define our own +load, the compiler takes the LAST definition and
+ *   discards the macro's — meaning RCTRegisterModule is never called and the module
+ *   stays null in NativeModules. Instead, we inline the macro's parts and add a
+ *   SINGLE combined +load that calls RCTRegisterModule first, then our init code.
  */
 @interface KobitonBiometricModule : NSObject <RCTBridgeModule>
 @end
 
 @implementation KobitonBiometricModule
 
-// RCT_EXPORT_MODULE() registers this class with React Native's module registry
-// via +load — fires before main(), guaranteed to appear in NativeModules.
-RCT_EXPORT_MODULE()
+// ── Manual inline of RCT_EXPORT_MODULE() ──────────────────────────────────────
+// We cannot use the macro because it defines +load, which would conflict with
+// our own +load below (ObjC takes the last definition — the macro's registration
+// call would be silently lost). Instead we expand the macro parts manually:
+//   1. Declare RCTRegisterModule (the external C function the bridge exposes)
+//   2. Implement +moduleName returning our JS-side module name
+//   3. Implement a SINGLE +load that calls RCTRegisterModule AND our init code
+RCT_EXTERN void RCTRegisterModule(Class);
++ (NSString *)moduleName { return @"KobitonBiometricModule"; }
 
-// +load fires when the ObjC runtime loads the class — before main() and before
-// React Native initialises. This is the earliest safe point to trigger
-// KobitonLAContext initialisation (starts its embedded GCDWebServer so the
-// Kobiton portal can reach the app to inject biometric signals).
 + (void)load {
-    // ── KobitonSdk (image injection) ─────────────────────────────────────────
-    // Log the version number to confirm the camera-injection framework is linked
-    // and loaded. If this line appears in device logs, the frame interception
-    // layer is alive. If absent, the framework was not linked / not embedded.
+    // 1. Register with the React Native bridge — MUST be first.
+    //    This is what RCT_EXPORT_MODULE() would have done in its +load.
+    //    Without this call NativeModules.KobitonBiometricModule is null in JS.
+    RCTRegisterModule(self);
+
+    // 2. KobitonSdk (image injection) ─────────────────────────────────────────
+    //    Log the version number to confirm the camera-injection framework is
+    //    linked and loaded. If this line appears in device logs, the frame
+    //    interception layer is alive. If absent, the framework is missing.
     NSLog(@"[KobitonSDK] KobitonSdk.framework loaded — version %.0f", KobitonSdkVersionNumber);
 
-    // ── KobitonLAContext (biometric injection) ────────────────────────────────
-    // Safely attempt to call configure() via the ObjC runtime so the embedded
-    // GCDWebServer starts up. The Kobiton portal connects to this web server to
-    // deliver biometric pass/fail injection signals.
-    NSLog(@"[KobitonSDK] KobitonBiometricModule +load — KobitonLAContext.framework is present");
+    // 3. KobitonLAContext (biometric injection) ────────────────────────────────
+    //    Safely attempt configure() via ObjC runtime so the embedded GCDWebServer
+    //    starts up. The Kobiton portal connects to this server to deliver biometric
+    //    pass/fail injection signals during test sessions.
+    NSLog(@"[KobitonSDK] KobitonBiometricModule +load — KobitonLAContext.framework present");
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
     SEL configureSel = NSSelectorFromString(@"configure");
     if ([KobitonLAContext respondsToSelector:configureSel]) {
         [KobitonLAContext performSelector:configureSel];
-        NSLog(@"[KobitonSDK] KobitonLAContext configure called OK — web-server should be running");
+        NSLog(@"[KobitonSDK] KobitonLAContext configure called OK — web-server running");
     } else {
-        NSLog(@"[KobitonSDK] KobitonLAContext.configure not found — framework self-initialises via +load");
+        NSLog(@"[KobitonSDK] KobitonLAContext.configure not found — self-initialises via +load");
     }
 #pragma clang diagnostic pop
 }
