@@ -146,15 +146,26 @@ function withKobitonAppDelegate(config, options) {
 
     if (isSwift) {
       // ── Swift AppDelegate (Expo SDK 52+) ─────────────────────────────────
-      // Per official Kobiton docs: embed KobitonLAContext.framework and add
-      // `import KobitonLAContext`. The framework self-initialises via its own
-      // +load method — no configure() call is needed in app code.
-      if (options.biometricSupport && !modResults.contents.includes('KobitonLAContext')) {
-        modResults.contents = modResults.contents.replace(
-          'import Expo',
-          'import Expo\nimport KobitonLAContext // Kobiton biometric SDK — drop-in replacement for LocalAuthentication'
-        );
-        console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — added import KobitonLAContext');
+      if (options.biometricSupport) {
+        // 1. Add import KobitonLAContext
+        if (!modResults.contents.includes('import KobitonLAContext')) {
+          modResults.contents = modResults.contents.replace(
+            'import Expo',
+            'import Expo\nimport KobitonLAContext // Kobiton biometric SDK — drop-in replacement for LocalAuthentication'
+          );
+          console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — added import KobitonLAContext');
+        }
+
+        // 2. Add NSLog + configure() as the very first lines of didFinishLaunchingWithOptions.
+        //    Uses a non-greedy multiline match from the override keyword to the opening brace
+        //    so it targets only that method and not any other -> Bool return.
+        if (!modResults.contents.includes('KobitonLAContext.configure()')) {
+          modResults.contents = modResults.contents.replace(
+            /(didFinishLaunchingWithOptions[\s\S]*?\) -> Bool \{)/,
+            '$1\n    NSLog("[TEST] AppDelegate didFinishLaunching")\n    KobitonLAContext.configure()\n    print("[KobitonSDK] configure called")'
+          );
+          console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — added configure() and diagnostic NSLog');
+        }
       }
     } else {
       // ── ObjC AppDelegate (Expo SDK < 52) ──────────────────────────────────
@@ -652,6 +663,119 @@ function withKobitonIosBiometric(config, options) {
       return mod;
     });
   }
+
+  // Step 3: Write KobitonBiometricModule.m into ios/{appName}/ during prebuild.
+  //   This file uses KobitonLAContext instead of LAContext so Kobiton can inject
+  //   biometric pass/fail signals. It also calls [TrustAgent startServer] via the
+  //   ObjC runtime (safe no-op if the class is absent) and emits diagnostic NSLogs.
+  config = withDangerousMod(config, [
+    'ios',
+    async (mod) => {
+      const projectRoot = mod.modRequest.projectRoot;
+      const appName = mod.modRequest.projectName; // e.g. 'KobitonExpenseTracker'
+      const moduleDir = path.join(projectRoot, 'ios', appName);
+
+      if (!fs.existsSync(moduleDir)) {
+        fs.mkdirSync(moduleDir, { recursive: true });
+      }
+
+      const moduleContent = [
+        '#import <React/RCTBridgeModule.h>',
+        '#import <KobitonLAContext/KobitonLAContext.h>',
+        '',
+        '@interface KobitonBiometricModule : NSObject <RCTBridgeModule>',
+        '@end',
+        '',
+        '@implementation KobitonBiometricModule',
+        '',
+        'RCT_EXTERN void RCTRegisterModule(Class);',
+        '+ (NSString *)moduleName { return @"KobitonBiometricModule"; }',
+        '',
+        '+ (void)load {',
+        '    NSLog(@"[KobitonSDK] +load entered");',
+        '    RCTRegisterModule(self);',
+        '',
+        '    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),',
+        '                   dispatch_get_main_queue(), ^{',
+        '        Class trustAgentClass = NSClassFromString(@"TrustAgent");',
+        '        if (trustAgentClass) {',
+        '            SEL startServerSel = NSSelectorFromString(@"startServer");',
+        '            if ([trustAgentClass respondsToSelector:startServerSel]) {',
+        '                [trustAgentClass performSelector:startServerSel];',
+        '                NSLog(@"[KobitonSDK] TrustAgent startServer called");',
+        '            } else {',
+        '                NSLog(@"[KobitonSDK] TrustAgent startServer selector not found");',
+        '            }',
+        '        } else {',
+        '            NSLog(@"[KobitonSDK] TrustAgent class not found");',
+        '        }',
+        '    });',
+        '}',
+        '',
+        'RCT_EXPORT_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve',
+        '                  reject:(RCTPromiseRejectBlock)reject) {',
+        '    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];',
+        '    NSError *error = nil;',
+        '    BOOL ok = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics',
+        '                               error:&error];',
+        '    resolve(@(ok));',
+        '}',
+        '',
+        'RCT_EXPORT_METHOD(authenticate:(NSString *)reason',
+        '                  resolve:(RCTPromiseResolveBlock)resolve',
+        '                  reject:(RCTPromiseRejectBlock)reject) {',
+        '    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];',
+        '    [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics',
+        '        localizedReason:reason',
+        '                  reply:^(BOOL success, NSError *error) {',
+        '        if (success) {',
+        '            NSLog(@"[KobitonSDK] authenticate: SUCCESS");',
+        '            resolve(@{@"success": @YES});',
+        '        } else {',
+        '            NSLog(@"[KobitonSDK] authenticate: FAILED — %@", error.localizedDescription);',
+        '            reject(@"E_BIOMETRIC_ERROR", error.localizedDescription, error);',
+        '        }',
+        '    }];',
+        '}',
+        '',
+        '@end',
+      ].join('\n');
+
+      const destPath = path.join(moduleDir, 'KobitonBiometricModule.m');
+      fs.writeFileSync(destPath, moduleContent, 'utf8');
+      console.log(`[KobitonSDK] ✓ Wrote KobitonBiometricModule.m → ${destPath}`);
+
+      return mod;
+    },
+  ]);
+
+  // Step 4: Register KobitonBiometricModule.m in the Xcode project so it compiles.
+  config = withXcodeProject(config, (mod) => {
+    const xcodeProject = mod.modResults;
+    const appName = mod.modRequest.projectName;
+
+    // Only add if not already registered (idempotent)
+    const sources = xcodeProject.pbxSourcesBuildPhaseObj(xcodeProject.getFirstTarget().uuid);
+    const alreadyAdded = sources && sources.files &&
+      sources.files.some((f) => {
+        const ref = xcodeProject.pbxFileReferenceSection()[f.value];
+        return ref && ref.path && ref.path.includes('KobitonBiometricModule.m');
+      });
+
+    if (!alreadyAdded) {
+      const groupKey = xcodeProject.findPBXGroupKey({ name: appName });
+      xcodeProject.addSourceFile(
+        `${appName}/KobitonBiometricModule.m`,
+        { target: xcodeProject.getFirstTarget().uuid },
+        groupKey
+      );
+      console.log('[KobitonSDK] ✓ Registered KobitonBiometricModule.m in Xcode Sources build phase');
+    } else {
+      console.log('[KobitonSDK] ✓ KobitonBiometricModule.m already registered — skipping');
+    }
+
+    return mod;
+  });
 
   return config;
 }
@@ -1930,12 +2054,6 @@ function withKobitonIosEmbedFrameworks(config, options) {
 
       let pbx = fs.readFileSync(pbxprojPath, 'utf8');
 
-      // Idempotency guard
-      if (pbx.includes('Embed Frameworks')) {
-        console.log('[KobitonSDK] ✓ Embed Frameworks phase already present — skipping.');
-        return mod;
-      }
-
       // Frameworks to embed, conditional on plugin options
       const frameworks = [];
       if (options.biometricSupport) {
@@ -1959,6 +2077,15 @@ function withKobitonIosEmbedFrameworks(config, options) {
 
       if (frameworks.length === 0) {
         console.log('[KobitonSDK] ✓ No frameworks to embed (biometricSupport + imageInjectionSupport both false).');
+        return mod;
+      }
+
+      // Idempotency guard — check for Kobiton-specific UUIDs, NOT generic "Embed Frameworks"
+      // (CocoaPods already puts an "Embed Frameworks" phase in every fresh pbxproj, so a
+      // generic string check would always bail out before we add KobitonLAContext).
+      const alreadyEmbedded = frameworks.some((fw) => pbx.includes(fw.embedUuid));
+      if (alreadyEmbedded) {
+        console.log('[KobitonSDK] ✓ Kobiton frameworks already embedded — skipping.');
         return mod;
       }
 
