@@ -1,0 +1,31 @@
+The post_install HEADER_SEARCH_PATHS fix isn't working because CocoaPods xcconfig files override project-level build settings. The fix must patch the xcconfig file directly.
+Replace the existing SliderHeaderFix block in withKobitonSDK.js with this approach that patches the xcconfig file instead:
+ruby# [SliderHeaderFix v2.0] Patch slider xcconfig to add generated headers path
+# post_install build_settings are overridden by xcconfig files - must patch xcconfig directly
+installer.pods_project.targets.each do |__shf_t__|
+  next unless __shf_t__.name == 'react-native-slider'
+  __shf_t__.build_configurations.each do |__shf_bc__|
+    # Patch the xcconfig file directly - this is what clang actually reads
+    __shf_xcconfig_path__ = __shf_bc__.base_configuration_reference&.real_path
+    next unless __shf_xcconfig_path__ && File.exist?(__shf_xcconfig_path__)
+    __shf_content__ = File.read(__shf_xcconfig_path__)
+    __shf_new_path__ = '$(PODS_ROOT)/../build/generated/ios'
+    unless __shf_content__.include?(__shf_new_path__)
+      if __shf_content__ =~ /HEADER_SEARCH_PATHS = (.*)/
+        __shf_content__ = __shf_content__.gsub(
+          /HEADER_SEARCH_PATHS = (.*)/,
+          "HEADER_SEARCH_PATHS = \\1 #{__shf_new_path__}"
+        )
+      else
+        __shf_content__ += "\nHEADER_SEARCH_PATHS = $(inherited) #{__shf_new_path__}\n"
+      end
+      File.write(__shf_xcconfig_path__, __shf_content__)
+      puts "[SliderHeaderFix v2.0] Patched xcconfig for #{__shf_bc__.name}: #{__shf_xcconfig_path__}"
+    end
+  end
+end
+After implementing, validate with:
+bashcd artifacts/kobiton-expense-tracker && npx expo prebuild --clean 2>&1 | grep -i "SliderHeaderFix"
+Then check the xcconfig was actually written:
+bashcat artifacts/kobiton-expense-tracker/ios/Pods/Target\ Support\ Files/react-native-slider/react-native-slider.release.xcconfig | grep "HEADER_SEARCH\|generated"
+If $(PODS_ROOT)/../build/generated/ios appears in the xcconfig file, the fix will work. The clang compiler reads xcconfig directly — this is what ends up in the response file passed to the compile command.
