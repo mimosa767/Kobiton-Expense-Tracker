@@ -156,10 +156,13 @@ function withKobitonAppDelegate(config, options) {
           console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — added import KobitonLAContext');
         }
 
-        // 2. Add NSLog + configure() as the very first lines of didFinishLaunchingWithOptions.
-        //    Uses a non-greedy multiline match from the override keyword to the opening brace
-        //    so it targets only that method and not any other -> Bool return.
-        if (!modResults.contents.includes('KobitonLAContext.configure()')) {
+        // 2. Add diagnostic NSLogs as the very first lines of didFinishLaunchingWithOptions.
+        //    NOTE: configure() is intentionally NOT called here.
+        //    KobitonLAContext.configure() is NOT in the public header — Swift cannot call
+        //    undeclared methods statically and would fail to compile. Instead, configure()
+        //    is called via ObjC performSelector: inside KobitonBiometricModule.m +load,
+        //    which fires BEFORE AppDelegate (at dylib-load time). This is safer and earlier.
+        if (!modResults.contents.includes('[KOBITON] APP LAUNCH')) {
           const before = modResults.contents;
           modResults.contents = modResults.contents.replace(
             /(didFinishLaunchingWithOptions[\s\S]*?\) -> Bool \{)/,
@@ -171,23 +174,20 @@ function withKobitonAppDelegate(config, options) {
               '    NSLog("[KOBITON] iOS version: %@", UIDevice.current.systemVersion)',
               '    NSLog("[KOBITON] KobitonLAContext class exists: %@", NSClassFromString("KobitonLAContext") != nil ? "YES" : "NO")',
               '    NSLog("[KOBITON] KobitonSdk class exists: %@", NSClassFromString("KobitonSdk") != nil ? "YES" : "NO")',
-              '    KobitonLAContext.configure()',
-              '    NSLog("[KOBITON] KobitonLAContext.configure() completed")',
+              '    // configure() called in KobitonBiometricModule.m +load (fires before AppDelegate)',
               '    NSLog("[KOBITON] ===== APP LAUNCH COMPLETE =====")',
             ].join('\n')
           );
 
-          // Verify the regex actually matched — emit an error with a content snippet if not
           if (modResults.contents === before) {
-            console.error('[KobitonSDK] ✗ FAILED: configure() patch did NOT apply — regex matched nothing.');
+            console.error('[KobitonSDK] ✗ FAILED: AppDelegate diagnostic patch did NOT apply — regex matched nothing.');
             console.error('[KobitonSDK]   AppDelegate first 800 chars:');
             console.error(modResults.contents.substring(0, 800));
           } else {
-            console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — added configure() and diagnostic NSLogs');
-            console.log('[KobitonSDK]   Verify: contains configure():', modResults.contents.includes('KobitonLAContext.configure()'));
+            console.log('[KobitonSDK] ✓ Patched Swift AppDelegate — added diagnostic NSLogs');
           }
         } else {
-          console.log('[KobitonSDK] ✓ configure() already present in AppDelegate — skipping patch');
+          console.log('[KobitonSDK] ✓ AppDelegate diagnostic logs already present — skipping patch');
         }
       }
     } else {
@@ -1733,18 +1733,29 @@ class KobitonPackage : ReactPackage {
 /**
  * Generates a single pure-ObjC KobitonBiometricModule.m in the iOS project.
  *
+ * WHY DIRECT IMPORT (not NSClassFromString):
+ *   Mirrors the Android pattern: KobitonBiometricModule.kt does
+ *     import com.kobiton.biometric.BiometricPrompt  ← static, no fallback
+ *   iOS now does:
+ *     #import <KobitonLAContext/KobitonLAContext.h>  ← static, no fallback
+ *   NSClassFromString(@"KobitonLAContext") ?: [LAContext class] was wrong —
+ *   if KobitonLAContext is missing the fallback silently uses stock LAContext,
+ *   which Kobiton cannot intercept.
+ *
+ * WHY configure() VIA performSelector (not Swift static call):
+ *   KobitonLAContext.h does NOT declare configure() in its public header.
+ *   Swift cannot call undeclared methods — `KobitonLAContext.configure()` in
+ *   the Swift AppDelegate would fail to compile with "no member 'configure'".
+ *   ObjC performSelector: sends the message at runtime with a respondsToSelector
+ *   guard — safe, no compile error. +load fires before AppDelegate so this
+ *   starts the embedded GCDWebServer even earlier.
+ *
  * WHY PURE OBJC (not Swift + RCT_EXTERN_MODULE):
  *   RCT_EXTERN_MODULE relies on the ObjC runtime finding a Swift-generated class
  *   at bridge startup. This is fragile — the Swift class can be dead-stripped by
- *   the linker if there are no direct references to it, or can fail with new arch.
- *   RCT_EXPORT_MODULE() in pure ObjC registers via +load (fires unconditionally at
- *   class load time, before main()) and is guaranteed to appear in NativeModules.
- *
- * The +load method also safely attempts [KobitonLAContext configure] via ObjC
- * runtime messaging (respondsToSelector guard) — this starts the embedded
- * GCDWebServer inside KobitonLAContext.framework that the Kobiton portal uses
- * to deliver biometric injection signals. All results are NSLog'd with
- * [KobitonSDK] prefix so they appear in native device logs.
+ *   the linker if there are no direct references to it, or can fail with old arch.
+ *   Pure ObjC with +moduleName + +load { RCTRegisterModule(self) } is guaranteed
+ *   to appear in NativeModules.
  *
  * This module exposes NativeModules.KobitonBiometricModule on iOS.
  */
@@ -1764,13 +1775,34 @@ function withKobitonIosBiometricNativeModule(config, options) {
           fs.mkdirSync(iosDir, { recursive: true });
         }
 
-        // ── KobitonBiometricModule.m (pure ObjC — RCT_EXPORT_MODULE) ──────────────
-        // Pure ObjC with RCT_EXPORT_MODULE() registers via +load at class-load time,
-        // exactly like Android's ReactContextBaseJavaModule registered via KobitonPackage.
-        // NSClassFromString(@"KobitonLAContext") avoids any header import and falls back
-        // to stock LAContext on non-Kobiton devices — no crash risk.
+        // ── KobitonBiometricModule.m (pure ObjC — direct KobitonLAContext import) ──
+        //
+        // KEY DESIGN DECISION — mirrors what makes Android work:
+        //   Android: import com.kobiton.biometric.BiometricPrompt  ← direct, no fallback
+        //   iOS:     #import <KobitonLAContext/KobitonLAContext.h> ← direct, no fallback
+        //
+        // Previously used NSClassFromString(@"KobitonLAContext") ?: [LAContext class].
+        // That pattern has two problems:
+        //   1. If KobitonLAContext.framework is missing at runtime, it silently falls back
+        //      to stock LAContext — Kobiton cannot intercept stock LAContext calls.
+        //   2. The compiler cannot verify the class exists at build time.
+        //
+        // configure() via performSelector:
+        //   KobitonLAContext.h does NOT declare configure() in its public header.
+        //   Swift cannot call undeclared methods statically — the AppDelegate patch
+        //   that called `KobitonLAContext.configure()` in Swift would fail to compile.
+        //   ObjC performSelector: sends the message at runtime — safe, no compile error.
+        //   +load fires BEFORE AppDelegate, so this is earlier than the old AppDelegate patch.
+        //
+        //   Binary analysis of KobitonLAContext.framework/KobitonLAContext shows it
+        //   embeds a KobitonGCDWebServer. configure()/start() launches this server so
+        //   the Kobiton dC-Runner can connect and deliver biometric inject signals —
+        //   exactly like KobitonSdk.framework's startConnection to MobileLabs_Trust_HTTPServer.
         const objcContent = `#import <React/RCTBridgeModule.h>
-#import <LocalAuthentication/LocalAuthentication.h>
+// Direct import — same pattern as Android's "import com.kobiton.biometric.BiometricPrompt"
+// KobitonLAContext is a LAContext subclass; using it directly (not via NSClassFromString)
+// ensures the Kobiton framework intercepts ALL evaluatePolicy: calls.
+#import <KobitonLAContext/KobitonLAContext.h>
 
 @interface KobitonBiometricModule : NSObject <RCTBridgeModule>
 @end
@@ -1781,22 +1813,37 @@ function withKobitonIosBiometricNativeModule(config, options) {
 
 + (void)load {
     RCTRegisterModule(self);
+    // Start KobitonLAContext's embedded web server (GCDWebServer).
+    // The server listens on a local port so the Kobiton dC-Runner can deliver
+    // biometric inject signals — same role as ImageInjectionClient on Android.
+    // Use performSelector: because configure() is not declared in the public header.
+    SEL configureSel = NSSelectorFromString(@"configure");
+    if ([KobitonLAContext respondsToSelector:configureSel]) {
+        NSLog(@"[KOBITON] +load — calling KobitonLAContext configure (embedded web server start)");
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [KobitonLAContext performSelector:configureSel];
+#pragma clang diagnostic pop
+        NSLog(@"[KOBITON] +load — KobitonLAContext configure completed");
+    } else {
+        NSLog(@"[KOBITON] +load — KobitonLAContext does not respond to configure — SDK self-initializes via +initialize");
+    }
 }
 
 - (NSDictionary *)constantsToExport {
-    NSLog(@"[KOBITON-NATIVE] KobitonBiometricModule constantsToExport called");
+    NSLog(@"[KOBITON-NATIVE] KobitonBiometricModule constantsToExport called — direct KobitonLAContext import active");
     return @{@"registered": @YES};
 }
 
 RCT_EXPORT_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 {
-    Class laClass = NSClassFromString(@"KobitonLAContext") ?: [LAContext class];
-    NSLog(@"[KOBITON] isAvailable — class: %@", NSStringFromClass(laClass));
-    id ctx = [[laClass alloc] init];
+    // Direct use: [[KobitonLAContext alloc] init] — same as Android's new BiometricPrompt(...)
+    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];
+    NSLog(@"[KOBITON] isAvailable — KobitonLAContext instance: %@", ctx);
     NSError *error = nil;
     BOOL ok = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&error];
-    NSLog(@"[KOBITON] isAvailable result: %@", ok ? @"YES" : @"NO");
+    NSLog(@"[KOBITON] isAvailable result: %@ error: %@", ok ? @"YES" : @"NO", error.localizedDescription ?: @"nil");
     resolve(@(ok));
 }
 
@@ -1804,15 +1851,15 @@ RCT_EXPORT_METHOD(authenticate:(NSString *)reason
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 {
-    NSLog(@"[KOBITON] authenticate — class: %@", NSStringFromClass(NSClassFromString(@"KobitonLAContext") ?: [LAContext class]));
-    Class laClass = NSClassFromString(@"KobitonLAContext") ?: [LAContext class];
-    id ctx = [[laClass alloc] init];
+    // Direct use: [[KobitonLAContext alloc] init] — same as Android's new BiometricPrompt(...)
+    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];
+    NSLog(@"[KOBITON] authenticate — KobitonLAContext instance: %@", ctx);
     [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
         localizedReason:reason
                   reply:^(BOOL success, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            NSLog(@"[KOBITON] authenticate result: %@", success ? @"YES" : @"NO");
-            resolve(@{@"success": @(success)});
+            NSLog(@"[KOBITON] authenticate result: %@ error: %@", success ? @"YES" : @"NO", error.localizedDescription ?: @"nil");
+            resolve(@{@"success": @(success), @"error": error.localizedDescription ?: [NSNull null]});
         });
     }];
 }
@@ -1962,4 +2009,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '4.2.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '4.3.0');
