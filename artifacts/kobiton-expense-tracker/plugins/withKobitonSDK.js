@@ -2070,13 +2070,33 @@ const withKobitonSDK = (config, options = {}) => {
         '    end',
       ].join('\n');
 
-      if (content.includes(POST_INSTALL_MARKER) && !content.includes(SLIDER_FIX_GUARD)) {
-        content = content.replace(POST_INSTALL_MARKER, `${POST_INSTALL_MARKER}\n${SLIDER_FIX_RUBY}`);
-        console.log('[withKobitonSDK v5.1.0] ✓ Injected SliderFix post_install block into Podfile');
-      } else if (content.includes(SLIDER_FIX_GUARD)) {
+      if (content.includes(SLIDER_FIX_GUARD)) {
         console.log('[withKobitonSDK v5.1.0] SliderFix post_install block already present — skipping injection');
+      } else if (content.includes(POST_INSTALL_MARKER)) {
+        // Happy path: inject into the existing post_install block
+        content = content.replace(POST_INSTALL_MARKER, `${POST_INSTALL_MARKER}\n${SLIDER_FIX_RUBY}`);
+        console.log('[withKobitonSDK v5.1.0] ✓ Injected SliderFix into existing post_install block');
       } else {
-        console.log('[withKobitonSDK v5.1.0] WARNING: no post_install block found in Podfile — could not inject SliderFix');
+        // Fallback: no post_install block at all — append a complete one before the last `end`
+        // This should never happen with a standard Expo-generated Podfile, but is handled
+        // defensively so the fix always lands regardless of Podfile shape.
+        const COMPLETE_POST_INSTALL = [
+          '',
+          '  post_install do |installer|',
+          SLIDER_FIX_RUBY,
+          '    react_native_post_install(installer, config[:reactNativePath], :mac_catalyst_enabled => false)',
+          '  end',
+        ].join('\n');
+        // Insert before the very last `end` (closing the `target` block)
+        const lastEndIdx = content.lastIndexOf('\nend');
+        if (lastEndIdx !== -1) {
+          content = content.slice(0, lastEndIdx) + COMPLETE_POST_INSTALL + content.slice(lastEndIdx);
+          console.log('[withKobitonSDK v5.1.0] ✓ Appended complete post_install block (fallback path — no existing post_install found)');
+        } else {
+          // Truly unrecognizable Podfile — append unconditionally and warn
+          content += `\n${COMPLETE_POST_INSTALL}\n`;
+          console.log('[withKobitonSDK v5.1.0] WARNING: could not find target end — appended post_install at EOF (unexpected Podfile shape)');
+        }
       }
 
       if (content !== original) {
