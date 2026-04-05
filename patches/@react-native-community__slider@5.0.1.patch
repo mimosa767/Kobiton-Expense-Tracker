@@ -1,0 +1,14 @@
+diff --git a/ios/RNCSliderComponentView.mm b/ios/RNCSliderComponentView.mm
+index 928c532..8563b0e 100644
+--- a/ios/RNCSliderComponentView.mm
++++ b/ios/RNCSliderComponentView.mm
+@@ -1,3 +1,4 @@
++#if RCT_NEW_ARCH_ENABLED
+ #import "RNCSliderComponentView.h"
+ 
+ #import <React/RCTConversions.h>
+@@ -300,3 +301,4 @@ Class<RCTComponentViewProtocol> RNCSliderCls(void)
+ {
+     return RNCSliderComponentView.class;
+ }
++#endif // RCT_NEW_ARCH_ENABLED
