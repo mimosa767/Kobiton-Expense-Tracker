@@ -1,7 +1,7 @@
 # Kobiton iOS Integration — Current Status
 
 Last updated: 2026-04-05  
-Plugin version: 4.1.0
+Plugin version: 4.2.0
 
 ---
 
