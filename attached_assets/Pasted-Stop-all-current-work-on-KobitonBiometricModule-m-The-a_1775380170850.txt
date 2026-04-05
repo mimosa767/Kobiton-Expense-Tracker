@@ -1,0 +1,43 @@
+Stop all current work on KobitonBiometricModule.m. The approach is wrong.
+The Kobiton iOS biometric SDK works by replacing LAContext() with KobitonLAContext() in Swift source code. expo-local-authentication calls Apple's LAContext() internally — we cannot change that, so it will never be intercepted.
+The correct approach:
+
+Create a new file ios/KobitonExpenseTracker/KobitonAuth.swift that calls KobitonLAContext() directly and exposes it as a React Native native module
+The Swift file should import KobitonLAContext (not LocalAuthentication) and call KobitonLAContext() for the biometric prompt
+biometricService.ts already calls NativeModules.KobitonBiometricModule — rename the Swift module to match that
+
+Here is the exact Swift file to create in withKobitonIosBiometricNativeModule instead of the ObjC module:
+swiftimport Foundation
+import KobitonLAContext
+
+@objc(KobitonBiometricModule)
+class KobitonBiometricModule: NSObject {
+
+  @objc func isAvailable(_ resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    let context = KobitonLAContext()
+    var error: NSError?
+    let available = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
+    NSLog("[KobitonSDK] isAvailable: \(available)")
+    resolve(available)
+  }
+
+  @objc func authenticate(_ reason: String, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    NSLog("[KobitonSDK] authenticate called")
+    let context = KobitonLAContext()
+    context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
+      DispatchQueue.main.async {
+        NSLog("[KobitonSDK] authenticate result: \(success)")
+        resolve(["success": success])
+      }
+    }
+  }
+
+  @objc static func requiresMainQueueSetup() -> Bool { return false }
+}
+And a bridge file KobitonBiometricModuleBridge.m:
+objc#import <React/RCTBridgeModule.h>
+@interface RCT_EXTERN_MODULE(KobitonBiometricModule, NSObject)
+RCT_EXTERN_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(authenticate:(NSString *)reason resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+@end
+This is the correct pattern. Swift calls KobitonLAContext() directly — exactly what the Kobiton docs require. No configure(), no TrustAgent, no +load. Just the class swap the docs describe, exposed to React Native via Swift + bridge."

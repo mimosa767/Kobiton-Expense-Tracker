@@ -1745,250 +1745,119 @@ class KobitonPackage : ReactPackage {
  * This module exposes NativeModules.KobitonBiometricModule on iOS.
  */
 function withKobitonIosBiometricNativeModule(config, options) {
-  if (!options.biometricSupport) return config;
+    if (!options.biometricSupport) return config;
 
-  // Step 1: Write KobitonBiometricModule.m to disk (pure ObjC, no Swift bridge)
-  config = withDangerousMod(config, [
-    'ios',
-    async (mod) => {
-      const projectRoot = mod.modRequest.projectRoot;
-      const iosProjectName = 'KobitonExpenseTracker';
-      const iosDir = path.join(projectRoot, 'ios', iosProjectName);
-      if (!fs.existsSync(iosDir)) {
-        fs.mkdirSync(iosDir, { recursive: true });
+    // Step 1: Write KobitonBiometricModule.swift + KobitonBiometricModuleBridge.m to disk.
+    // Swift calls KobitonLAContext() directly — the class-swap the Kobiton docs require.
+    // The ObjC bridge exposes it to React Native via RCT_EXTERN_MODULE.
+    config = withDangerousMod(config, [
+      'ios',
+      async (mod) => {
+        const projectRoot = mod.modRequest.projectRoot;
+        const iosProjectName = 'KobitonExpenseTracker';
+        const iosDir = path.join(projectRoot, 'ios', iosProjectName);
+        if (!fs.existsSync(iosDir)) {
+          fs.mkdirSync(iosDir, { recursive: true });
+        }
+
+        // ── KobitonBiometricModule.swift ───────────────────────────────────────
+        const swiftContent = `import Foundation
+  import KobitonLAContext
+
+  @objc(KobitonBiometricModule)
+  class KobitonBiometricModule: NSObject {
+
+    @objc func isAvailable(_ resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+      NSLog("[KobitonSDK] isAvailable called")
+      let context = KobitonLAContext()
+      var error: NSError?
+      let available = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
+      NSLog("[KobitonSDK] isAvailable: \\(available)")
+      resolve(available)
+    }
+
+    @objc func authenticate(_ reason: String, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+      NSLog("[KobitonSDK] authenticate called — reason: \\(reason)")
+      let context = KobitonLAContext()
+      context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
+        DispatchQueue.main.async {
+          NSLog("[KobitonSDK] authenticate result: \\(success)")
+          if success {
+            resolve(["success": true])
+          } else {
+            let msg = error?.localizedDescription ?? "Authentication failed"
+            NSLog("[KobitonSDK] authenticate error: \\(msg)")
+            resolve(["success": false, "error": msg])
+          }
+        }
+      }
+    }
+
+    @objc static func requiresMainQueueSetup() -> Bool { return false }
+  }
+  `;
+
+        // ── KobitonBiometricModuleBridge.m ─────────────────────────────────────
+        const bridgeContent = `#import <React/RCTBridgeModule.h>
+
+  @interface RCT_EXTERN_MODULE(KobitonBiometricModule, NSObject)
+  RCT_EXTERN_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+  RCT_EXTERN_METHOD(authenticate:(NSString *)reason resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+  @end
+  `;
+
+        fs.writeFileSync(path.join(iosDir, 'KobitonBiometricModule.swift'), swiftContent, 'utf8');
+        console.log('[KobitonSDK] ✓ Wrote KobitonBiometricModule.swift (Swift + KobitonLAContext)');
+
+        fs.writeFileSync(path.join(iosDir, 'KobitonBiometricModuleBridge.m'), bridgeContent, 'utf8');
+        console.log('[KobitonSDK] ✓ Wrote KobitonBiometricModuleBridge.m (RCT_EXTERN_MODULE bridge)');
+
+        // Remove stale pure-ObjC version from earlier builds
+        const staleFiles = ['KobitonBiometricModule.m', 'KobitonBiometricBridge.m'];
+        for (const f of staleFiles) {
+          const p = path.join(iosDir, f);
+          if (fs.existsSync(p)) { fs.unlinkSync(p); console.log(`[KobitonSDK] ✓ Removed stale ${f}`); }
+        }
+
+        return mod;
+      },
+    ]);
+
+    // Step 2: Register both files in Xcode so they compile.
+    config = withXcodeProject(config, (mod) => {
+      const xcodeProject = mod.modResults;
+      const appName = mod.modRequest.projectName;
+      const target = xcodeProject.getFirstTarget().uuid;
+      const groupKey = xcodeProject.findPBXGroupKey({ name: appName });
+
+      const sources = xcodeProject.pbxSourcesBuildPhaseObj(target);
+      const alreadyHasSwift = sources && sources.files &&
+        sources.files.some((f) => {
+          const ref = xcodeProject.pbxFileReferenceSection()[f.value];
+          return ref && ref.path && ref.path.includes('KobitonBiometricModule.swift');
+        });
+
+      if (!alreadyHasSwift) {
+        xcodeProject.addSourceFile(`${appName}/KobitonBiometricModule.swift`, { target }, groupKey);
+        console.log('[KobitonSDK] ✓ Registered KobitonBiometricModule.swift in Xcode Sources build phase');
       }
 
-      // ── KobitonBiometricModule.m — pure ObjC native module ─────────────────
-      //
-      // Uses RCT_EXPORT_MODULE() (not RCT_EXTERN_MODULE) which registers via
-      // +load — the most reliable registration path that works regardless of
-      // new-arch / old-arch / link order.
-      //
-      // +load also safely probes for [KobitonLAContext configure] using
-      // respondsToSelector so the GCDWebServer embedded in KobitonLAContext
-      // starts as early as possible (before React Native initialises).
-      const moduleM = `#import <React/RCTBridgeModule.h>
-#import <LocalAuthentication/LocalAuthentication.h>
+      const alreadyHasBridge = sources && sources.files &&
+        sources.files.some((f) => {
+          const ref = xcodeProject.pbxFileReferenceSection()[f.value];
+          return ref && ref.path && ref.path.includes('KobitonBiometricModuleBridge.m');
+        });
 
-/**
- * Kobiton Biometric Native Module — pure Objective-C
- *
- * Registers as NativeModules.KobitonBiometricModule in React Native.
- * Uses KobitonLAContext (Kobiton's drop-in for Apple LAContext) so the Kobiton
- * platform can inject biometric pass/fail signals during test sessions without
- * requiring a physically enrolled biometric on the device.
- *
- * Injection from the Kobiton portal:
- *   driver.execute('mobile:biometrics-authenticate', { result: 'passed' })
- *   driver.execute('mobile:biometrics-authenticate', { result: 'failed' })
- *
- * All log lines carry the [KobitonSDK] prefix so they are searchable in the
- * Kobiton device session log viewer.
- *
- * WHY RCT_EXPORT_MODULE() IS NOT USED DIRECTLY:
- *   RCT_EXPORT_MODULE() expands to define +(void)load { RCTRegisterModule(self); }.
- *   If we also define our own +load, the compiler takes the LAST definition and
- *   discards the macro's — meaning RCTRegisterModule is never called and the module
- *   stays null in NativeModules. Instead, we inline the macro's parts and add a
- *   SINGLE combined +load that calls RCTRegisterModule first, then our init code.
- */
-@interface KobitonBiometricModule : NSObject <RCTBridgeModule>
-@end
+      if (!alreadyHasBridge) {
+        xcodeProject.addSourceFile(`${appName}/KobitonBiometricModuleBridge.m`, { target }, groupKey);
+        console.log('[KobitonSDK] ✓ Registered KobitonBiometricModuleBridge.m in Xcode Sources build phase');
+      }
 
-@implementation KobitonBiometricModule
-
-// RCT_EXPORT_MODULE handles its own +load registration — no conflict with
-// +initialize below because +initialize fires lazily (on first use) after
-// the bridge is ready, eliminating the deadlock risk of calling
-// RCTRegisterModule inside +load before the bridge exists.
-RCT_EXPORT_MODULE(KobitonBiometricModule);
-
-+ (void)initialize {
-    if (self != [KobitonBiometricModule class]) return;
-    NSLog(@"[KobitonSDK] +initialize entered");
-
-    // 1. KobitonSdk version — confirms binary is linked and image injection
-    //    framework is present. If this line is absent, the framework is missing.
-    // 2. TrustAgent — local HTTP server inside KobitonSdk.framework that the
-    //    Kobiton portal connects to (inbound) for image injection commands.
-    //    Deferred 2 seconds so the main run loop is fully alive before the
-    //    socket tries to bind. GCDAsyncSocket acceptOnInterface:port: needs
-    //    an active run loop; calling it too early can silently fail.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        NSLog(@"[KobitonSDK] TrustAgent startServer dispatch fired — 2s after +initialize");
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-        Class trustAgentClass = NSClassFromString(@"TrustAgent");
-        if (trustAgentClass) {
-            NSLog(@"[KobitonSDK] TrustAgent class found in KobitonSdk.framework");
-            id trustAgent = [trustAgentClass new];
-            SEL startServerSel = NSSelectorFromString(@"startServer");
-            if ([trustAgent respondsToSelector:startServerSel]) {
-                id result = [trustAgent performSelector:startServerSel];
-                NSLog(@"[KobitonSDK] TrustAgent startServer result: %@", result);
-            } else {
-                // Fallback: some SDK versions expose a singleton accessor
-                SEL sharedSel = NSSelectorFromString(@"sharedAgent");
-                if ([trustAgentClass respondsToSelector:sharedSel]) {
-                    id shared = [trustAgentClass performSelector:sharedSel];
-                    if ([shared respondsToSelector:startServerSel]) {
-                        id result = [shared performSelector:startServerSel];
-                        NSLog(@"[KobitonSDK] TrustAgent sharedAgent startServer result: %@", result);
-                    }
-                } else {
-                    NSLog(@"[KobitonSDK] TrustAgent.startServer not found — server may auto-start via +load");
-                }
-            }
-        } else {
-            NSLog(@"[KobitonSDK] TrustAgent class NOT found — KobitonSdk.framework may not be embedded");
-        }
-#pragma clang diagnostic pop
+      return mod;
     });
 
-    // 3. KobitonLAContext — biometric injection GCDWebServer.
-    //    configure() starts the server that the Kobiton portal connects to
-    //    to deliver biometric pass/fail signals during test sessions.
-    NSLog(@"[KobitonSDK] KobitonBiometricModule +initialize — KobitonLAContext.framework present");
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-    SEL configureSel = NSSelectorFromString(@"configure");
-    if ([KobitonLAContext respondsToSelector:configureSel]) {
-        [KobitonLAContext performSelector:configureSel];
-        NSLog(@"[KobitonSDK] KobitonLAContext configure called OK — web-server running");
-    } else {
-        NSLog(@"[KobitonSDK] KobitonLAContext.configure not found — self-initialises via +load");
-    }
-#pragma clang diagnostic pop
-}
-
-RCT_EXPORT_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
-{
-    NSLog(@"[KobitonSDK] isAvailable called");
-    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];
-    NSError *error = nil;
-    BOOL ok = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
-                               error:&error];
-    if (ok) {
-        NSLog(@"[KobitonSDK] isAvailable: YES");
-    } else {
-        NSLog(@"[KobitonSDK] isAvailable: NO — %@", error.localizedDescription);
-    }
-    resolve(@(ok));
-}
-
-RCT_EXPORT_METHOD(authenticate:(NSString *)reason
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
-{
-    NSLog(@"[KobitonSDK] authenticate — reason: %@", reason);
-    KobitonLAContext *ctx = [[KobitonLAContext alloc] init];
-    [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
-        localizedReason:reason
-                  reply:^(BOOL success, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (success) {
-                NSLog(@"[KobitonSDK] authenticate: SUCCESS — Kobiton injected biometric OK");
-                resolve(@{@"success": @YES});
-            } else {
-                NSString *msg = error.localizedDescription ?: @"Authentication failed";
-                NSLog(@"[KobitonSDK] authenticate: FAILED — %@", msg);
-                resolve(@{@"success": @NO, @"error": msg});
-            }
-        });
-    }];
-}
-
-+ (BOOL)requiresMainQueueSetup { return NO; }
-
-@end
-`;
-
-      fs.writeFileSync(path.join(iosDir, 'KobitonBiometricModule.m'), moduleM, 'utf8');
-      // Remove stale Swift + bridge pair if they exist from an earlier prebuild
-      const staleFiles = ['KobitonBiometricModule.swift', 'KobitonBiometricBridge.m'];
-      for (const f of staleFiles) {
-        const p = path.join(iosDir, f);
-        if (fs.existsSync(p)) { fs.unlinkSync(p); }
-      }
-      console.log('[KobitonSDK] ✓ Wrote KobitonBiometricModule.m (pure ObjC) for iOS');
-
-      const bridgingHeaderPath = path.join(projectRoot, 'ios', 'KobitonExpenseTracker', 'KobitonExpenseTracker-Bridging-Header.h');
-      if (fs.existsSync(bridgingHeaderPath)) {
-        let bh = fs.readFileSync(bridgingHeaderPath, 'utf8');
-        if (!bh.includes('KobitonBiometricModule')) {
-          bh += '\n#import "KobitonBiometricModule.m"\n';
-          fs.writeFileSync(bridgingHeaderPath, bh, 'utf8');
-          console.log('[KobitonSDK] ✓ Added KobitonBiometricModule.m to Bridging Header');
-        }
-      }
-
-      return mod;
-    },
-  ]);
-
-  // Step 2: Register KobitonBiometricModule.m in project.pbxproj
-  // (withDangerousMod writes to disk only; Xcode won't compile unless the file
-  // is registered in PBXFileReference + PBXBuildFile + PBXSourcesBuildPhase)
-  config = withDangerousMod(config, [
-    'ios',
-    async (mod) => {
-      const projectRoot = mod.modRequest.projectRoot;
-      const pbxprojPath = path.join(
-        projectRoot, 'ios', 'KobitonExpenseTracker.xcodeproj', 'project.pbxproj'
-      );
-      if (!fs.existsSync(pbxprojPath)) {
-        console.warn('[KobitonSDK] ⚠ project.pbxproj not found — skipping Xcode source registration.');
-        return mod;
-      }
-
-      let pbx = fs.readFileSync(pbxprojPath, 'utf8');
-
-      // Idempotency guard — skip if already patched
-      if (pbx.includes('KobitonBiometricModule.m')) {
-        console.log('[KobitonSDK] ✓ KobitonBiometricModule.m already in Xcode project — skipping.');
-        return mod;
-      }
-
-      // Deterministic 24-hex-char UUIDs (unchanged from prior scheme so existing
-      // builds that had the Swift+bridge pair still get unique non-colliding UUIDs)
-      const OBJC_BUILD_UUID = '4B544E0000000000000001AA'; // KobitonBiometricModule.m → build file
-      const OBJC_REF_UUID   = '4B544E0000000000000002AA'; // KobitonBiometricModule.m → file reference
-
-      // 1. PBXBuildFile section
-      pbx = pbx.replace(
-        '/* Begin PBXBuildFile section */',
-        `/* Begin PBXBuildFile section */\n\t\t${OBJC_BUILD_UUID} /* KobitonBiometricModule.m in Sources */ = {isa = PBXBuildFile; fileRef = ${OBJC_REF_UUID} /* KobitonBiometricModule.m */; };`
-      );
-
-      // 2. PBXFileReference section
-      pbx = pbx.replace(
-        '/* Begin PBXFileReference section */',
-        `/* Begin PBXFileReference section */\n\t\t${OBJC_REF_UUID} /* KobitonBiometricModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = KobitonBiometricModule.m; path = KobitonExpenseTracker/KobitonBiometricModule.m; sourceTree = "<group>"; };`
-      );
-
-      // 3. PBXGroup — add beside AppDelegate.swift
-      pbx = pbx.replace(
-        /(\t+\w+ \/\* AppDelegate\.swift \*\/,)/,
-        `$1\n\t\t\t\t${OBJC_REF_UUID} /* KobitonBiometricModule.m */,`
-      );
-
-      // 4. PBXSourcesBuildPhase — compile it
-      pbx = pbx.replace(
-        /(\t+\w+ \/\* AppDelegate\.swift in Sources \*\/,)/,
-        `$1\n\t\t\t\t${OBJC_BUILD_UUID} /* KobitonBiometricModule.m in Sources */,`
-      );
-
-      fs.writeFileSync(pbxprojPath, pbx, 'utf8');
-      console.log('[KobitonSDK] ✓ Added KobitonBiometricModule.m to Xcode project (all 4 PBX sections)');
-
-      return mod;
-    },
-  ]);
-
-  return config;
-}
+    return config;
+  }
 
 // ─── iOS: Embed Frameworks in Xcode project ───────────────────────────────────
 //
