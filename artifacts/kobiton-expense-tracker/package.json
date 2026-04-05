@@ -5,6 +5,7 @@
   "main": "expo-router/entry",
   "expo": {
     "autolinking": {
+      "legacy_shallowReactNativeLinking": true,
       "ios": {
         "exclude": ["@react-native-community/slider"]
       },
