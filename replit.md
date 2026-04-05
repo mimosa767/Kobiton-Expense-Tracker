@@ -103,7 +103,7 @@ Cross-platform mobile expense tracking app (Expo / React Native + TypeScript). T
 - Biometric login via `expo-local-authentication` (native only, platform-guarded)
 - Full CRUD for expenses with AsyncStorage persistence
 - Receipt image picker via `expo-image-picker`
-- Amount slider (HTML range on web, native slider on iOS/Android)
+- Amount slider (HTML range on web, custom PanResponder-based slider on native — no native module dependency)
 - Date picker (HTML date input on web, DateTimePicker on native)
 - Debug screen: seed sample data, clear all data, simulate receipt
 - testIDs on all key controls for automated testing
@@ -111,12 +111,12 @@ Cross-platform mobile expense tracking app (Expo / React Native + TypeScript). T
 **Key packages**:
 - `expo-local-authentication@~15.0.0`, `expo-image-picker`, `expo-haptics`
 - `react-hook-form` + `@hookform/resolvers` + `zod`
-- `@react-native-community/slider` (native only — web uses HTML input[type=range])
 - `@react-native-community/datetimepicker` (native only — web uses HTML input[type=date])
 - `react-native-keyboard-controller`
 
 **Web compatibility notes**:
-- Slider and DateTimePicker are rendered conditionally using `Platform.OS === 'web'`
+- Slider uses a custom PanResponder implementation on native and HTML input[type=range] on web — no @react-native-community/slider dependency (removed to fix EAS Old Architecture iOS build failures where RNCSliderComponentView.mm would not compile)
+- DateTimePicker is rendered conditionally using `Platform.OS === 'web'`
 - `require()` is used for native-only modules inside component wrappers to avoid undefined imports on web
 - `expo-local-authentication` is platform-guarded (returns false on web)
 

@@ -1951,7 +1951,7 @@ function withKobitonIosEmbedFrameworks(config, options) {
 // ─── Main plugin ─────────────────────────────────────────────────────────────
 
 const withKobitonSDK = (config, options = {}) => {
-  console.log('KOBITON PLUGIN EXECUTING — options:', JSON.stringify(options));
+  console.log('[withKobitonSDK v5.0.0] EXECUTING — @react-native-community/slider REMOVED — options:', JSON.stringify(options));
   config = withKobitonPod(config);
   config = withKobitonInfoPlist(config, options);
   config = withKobitonAppDelegate(config, options);
@@ -2009,4 +2009,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '4.3.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '5.0.0');
