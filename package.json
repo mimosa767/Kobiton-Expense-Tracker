@@ -13,5 +13,9 @@
     "typescript": "~5.9.2",
     "prettier": "^3.8.1"
   },
-  "pnpm": {}
+  "pnpm": {
+    "overrides": {
+      "@react-native-community/slider": "4.5.5"
+    }
+  }
 }
