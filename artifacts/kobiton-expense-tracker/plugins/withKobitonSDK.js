@@ -1914,6 +1914,16 @@ RCT_EXPORT_METHOD(authenticate:(NSString *)reason
       }
       console.log('[KobitonSDK] ✓ Wrote KobitonBiometricModule.m (pure ObjC) for iOS');
 
+      const bridgingHeaderPath = path.join(projectRoot, 'ios', 'KobitonExpenseTracker', 'KobitonExpenseTracker-Bridging-Header.h');
+      if (fs.existsSync(bridgingHeaderPath)) {
+        let bh = fs.readFileSync(bridgingHeaderPath, 'utf8');
+        if (!bh.includes('KobitonBiometricModule')) {
+          bh += '\n#import "KobitonBiometricModule.m"\n';
+          fs.writeFileSync(bridgingHeaderPath, bh, 'utf8');
+          console.log('[KobitonSDK] ✓ Added KobitonBiometricModule.m to Bridging Header');
+        }
+      }
+
       return mod;
     },
   ]);
@@ -2081,4 +2091,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.6.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.7.0');
