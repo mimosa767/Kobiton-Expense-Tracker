@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
+  PanResponder,
   Platform,
   ScrollView,
   StyleSheet,
@@ -85,20 +86,65 @@ function WebSlider({ value, max, onChange }: { value: number; max: number; onCha
 }
 
 function NativeSlider({ value, max, onChange }: { value: number; max: number; onChange: (v: number) => void }) {
-  const SliderComponent = require('@react-native-community/slider').default;
+  const [trackWidth, setTrackWidth] = useState(0);
+  const trackWidthRef = useRef(0);
+  const maxRef = useRef(max);
+  const onChangeRef = useRef(onChange);
+  maxRef.current = max;
+  onChangeRef.current = onChange;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => {
+        if (trackWidthRef.current === 0) return;
+        const raw = Math.round((e.nativeEvent.locationX / trackWidthRef.current) * maxRef.current);
+        onChangeRef.current(Math.min(maxRef.current, Math.max(0, raw)));
+      },
+      onPanResponderMove: (e) => {
+        if (trackWidthRef.current === 0) return;
+        const raw = Math.round((e.nativeEvent.locationX / trackWidthRef.current) * maxRef.current);
+        onChangeRef.current(Math.min(maxRef.current, Math.max(0, raw)));
+      },
+    })
+  ).current;
+
+  const thumbX = trackWidth > 0 ? Math.round((value / max) * (trackWidth - 20)) : 0;
+
   return (
-    <SliderComponent
-      style={styles.slider}
-      minimumValue={0}
-      maximumValue={max}
-      value={value}
-      onValueChange={onChange}
-      minimumTrackTintColor={Colors.primary}
-      maximumTrackTintColor={Colors.border}
-      thumbTintColor={Colors.primary}
-      accessibilityLabel="Amount slider"
+    <View
+      style={[styles.slider, { height: 40, justifyContent: 'center' }]}
+      onLayout={(e) => {
+        const w = e.nativeEvent.layout.width;
+        setTrackWidth(w);
+        trackWidthRef.current = w;
+      }}
+      {...panResponder.panHandlers}
       testID="expense-amount-slider"
-    />
+      accessibilityLabel="Amount slider"
+      accessibilityRole="adjustable"
+      accessibilityValue={{ min: 0, max, now: value }}
+    >
+      <View style={{ height: 4, borderRadius: 2, backgroundColor: Colors.border }}>
+        <View style={{ height: 4, borderRadius: 2, backgroundColor: Colors.primary, width: thumbX + 10 }} />
+      </View>
+      <View
+        style={{
+          position: 'absolute',
+          left: thumbX,
+          top: 10,
+          width: 20,
+          height: 20,
+          borderRadius: 10,
+          backgroundColor: Colors.primary,
+          shadowColor: '#000',
+          shadowOpacity: 0.15,
+          shadowRadius: 3,
+          elevation: 2,
+        }}
+      />
+    </View>
   );
 }
 
