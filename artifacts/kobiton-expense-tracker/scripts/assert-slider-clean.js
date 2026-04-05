@@ -33,6 +33,8 @@ function fail(msg) {
   process.exit(1);
 }
 
+log('script started — cwd: ' + process.cwd());
+
 // ── Candidate roots used by both strategies ──────────────────────────────────
 
 const candidateRoots = new Set();

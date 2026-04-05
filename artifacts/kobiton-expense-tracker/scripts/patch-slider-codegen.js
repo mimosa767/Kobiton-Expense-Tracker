@@ -21,6 +21,8 @@ function log(msg) {
   process.stdout.write('[patch-slider-codegen] ' + msg + '\n');
 }
 
+log('script started — cwd: ' + process.cwd());
+
 // ── 1. Collect candidate monorepo roots ─────────────────────────────────────
 // process.cwd() is the monorepo root when pnpm runs lifecycle scripts on EAS.
 // Walk up from __dirname as additional fallback for any other context.
