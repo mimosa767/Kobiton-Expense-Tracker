@@ -1769,8 +1769,6 @@ function withKobitonIosBiometricNativeModule(config, options) {
       // starts as early as possible (before React Native initialises).
       const moduleM = `#import <React/RCTBridgeModule.h>
 #import <LocalAuthentication/LocalAuthentication.h>
-#import <KobitonLAContext/KobitonLAContext.h>
-#import <KobitonSdk/KobitonSdk.h>
 
 /**
  * Kobiton Biometric Native Module — pure Objective-C
@@ -1811,8 +1809,6 @@ RCT_EXPORT_MODULE(KobitonBiometricModule);
 
     // 1. KobitonSdk version — confirms binary is linked and image injection
     //    framework is present. If this line is absent, the framework is missing.
-    NSLog(@"[KobitonSDK] KobitonSdk.framework loaded — version %.0f", KobitonSdkVersionNumber);
-
     // 2. TrustAgent — local HTTP server inside KobitonSdk.framework that the
     //    Kobiton portal connects to (inbound) for image injection commands.
     //    Deferred 2 seconds so the main run loop is fully alive before the
