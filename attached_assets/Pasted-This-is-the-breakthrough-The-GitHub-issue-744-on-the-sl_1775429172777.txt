@@ -1,0 +1,42 @@
+This is the breakthrough. The GitHub issue #744 on the slider repo confirms this is a known bug in slider v5 with Old Architecture, and the fix is patching the podspec, not package.json. Here's exactly what to tell Replit:
+
+Stop everything. We've been patching the wrong file this entire time.
+The root cause is documented in GitHub issue #744 on the callstack/react-native-slider repo: slider v5 ships a podspec that always includes RNCSliderComponentView.mm regardless of architecture. The fix is to patch react-native-slider.podspec, not package.json.
+The confirmed working patch from issue #744 is:
+diff- s.source_files = "ios/**/*.{h,m,mm}"
++ if new_arch_enabled
++   s.source_files = "ios/**/*.{h,m,mm}"
++ else
++   s.source_files = "ios/**/*.{h,m}"
++   s.exclude_files = "ios/**/RNCSliderComponentView.{h,mm}"
++ end
+Do this in withKobitonSDK.js — add a new withDangerousMod that patches react-native-slider.podspec before pod install runs:
+javascript// Patch react-native-slider podspec for Old Architecture compatibility
+config = withDangerousMod(config, ['ios', async (config) => {
+  const podspecPaths = [
+    // pnpm store path with peer dep hash
+    ...require('glob').sync(
+      '**/node_modules/.pnpm/@react-native-community+slider*/node_modules/@react-native-community/slider/react-native-slider.podspec',
+      { cwd: path.resolve(config.modRequest.projectRoot, '../..'), absolute: true }
+    ),
+    // direct path fallback
+    path.resolve(config.modRequest.projectRoot, '../../node_modules/.pnpm/@react-native-community+slider@5.1.2/node_modules/@react-native-community/slider/react-native-slider.podspec'),
+  ].filter(fs.existsSync);
+
+  for (const podspecPath of podspecPaths) {
+    let content = fs.readFileSync(podspecPath, 'utf8');
+    if (content.includes('[SliderPodspecFix]')) {
+      console.log('[withKobitonSDK] SliderPodspecFix already applied');
+      continue;
+    }
+    content = content.replace(
+      /s\.source_files\s*=\s*["']ios\/\*\*\/\*\.\{h,m,mm\}["']/,
+      `# [SliderPodspecFix] Old Arch: exclude Fabric-only .mm file\n  if new_arch_enabled\n    s.source_files = "ios/**/*.{h,m,mm}"\n  else\n    s.source_files = "ios/**/*.{h,m}"\n    s.exclude_files = "ios/**/RNCSliderComponentView.{h,mm}"\n  end`
+    );
+    fs.writeFileSync(podspecPath, content);
+    console.log('[withKobitonSDK] ✓ Patched react-native-slider.podspec for Old Arch at:', podspecPath);
+  }
+  return config;
+}]);
+Also add the same patch to eas-build-post-install in package.json as a shell one-liner fallback.
+This is the correct fix — patching the podspec means CocoaPods itself excludes RNCSliderComponentView.mm from the compile sources when new_arch_enabled is false, before Xcode ever sees the file. Every other approach we've tried patches downstream artifacts. This patches the source declaration itself.

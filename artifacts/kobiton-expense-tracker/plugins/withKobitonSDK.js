@@ -2006,6 +2006,114 @@ const withKobitonSDK = (config, options = {}) => {
     config = withKobitonIosEmbedFrameworks(config, options);
   }
 
+  // ── Slider podspec patch (most upstream fix — GitHub issue #744) ────────────
+  // react-native-slider v5 ships a podspec that always includes
+  // RNCSliderComponentView.mm regardless of architecture.  This file requires
+  // Fabric/New Arch headers and fails to compile with Old Architecture.
+  // The fix (confirmed in callstack/react-native-slider#744) patches the podspec
+  // BEFORE pod install runs, so CocoaPods itself excludes the file when building
+  // with Old Architecture (RCT_NEW_ARCH_ENABLED != 1).
+  config = withDangerousMod(config, [
+    'ios',
+    async (mod) => {
+      const projectRoot = mod.modRequest.projectRoot;
+
+      // Locate react-native-slider.podspec in every possible node_modules layout:
+      //   1. Hoisted:  <root>/node_modules/@react-native-community/slider/
+      //   2. pnpm vstore: <root>/node_modules/.pnpm/@react-native-community+slider@x.x.x_.../
+      //                   node_modules/@react-native-community/slider/
+      function findPodspecs(searchRoot) {
+        const found = [];
+
+        // 1. Direct / hoisted path
+        const direct = path.join(
+          searchRoot, 'node_modules', '@react-native-community', 'slider', 'react-native-slider.podspec',
+        );
+        if (fs.existsSync(direct)) found.push(direct);
+
+        // 2. pnpm virtual store
+        const pnpmDir = path.join(searchRoot, 'node_modules', '.pnpm');
+        if (fs.existsSync(pnpmDir)) {
+          try {
+            const entries = fs.readdirSync(pnpmDir);
+            for (const entry of entries) {
+              if (!entry.startsWith('@react-native-community+slider')) continue;
+              const p = path.join(
+                pnpmDir, entry, 'node_modules', '@react-native-community', 'slider', 'react-native-slider.podspec',
+              );
+              if (fs.existsSync(p)) found.push(p);
+            }
+          } catch (_) {}
+        }
+
+        return found;
+      }
+
+      const searchRoots = [
+        projectRoot,                          // app root
+        path.join(projectRoot, '..', '..'),   // monorepo root (pnpm workspace)
+        path.join(projectRoot, '..'),
+      ];
+
+      const PODSPEC_GUARD = '[SliderPodspecFix]';
+      const PATCH = [
+        `  # ${PODSPEC_GUARD} Old Arch: exclude Fabric-only .mm file`,
+        `  # Confirmed fix — github.com/callstack/react-native-slider/issues/744`,
+        `  if ENV['RCT_NEW_ARCH_ENABLED'] == '1'`,
+        `    s.source_files = "ios/**/*.{h,m,mm}"`,
+        `  else`,
+        `    s.source_files = "ios/**/*.{h,m}"`,
+        `    s.exclude_files = "ios/**/RNCSliderComponentView.{h,mm}"`,
+        `  end`,
+      ].join('\n');
+
+      let totalPatched = 0;
+      const seen = new Set();
+
+      for (const root of searchRoots) {
+        for (const podspecPath of findPodspecs(root)) {
+          const resolved = path.resolve(podspecPath);
+          if (seen.has(resolved)) continue;
+          seen.add(resolved);
+
+          try {
+            let content = fs.readFileSync(podspecPath, 'utf8');
+
+            if (content.includes(PODSPEC_GUARD)) {
+              console.log(`[withKobitonSDK v5.1.0] SliderPodspecFix already applied at: ${podspecPath}`);
+              continue;
+            }
+
+            // Replace the source_files line that unconditionally includes .mm files
+            const patched = content.replace(
+              /[ \t]*s\.source_files\s*=\s*["']ios\/\*\*\/\*\.\{h,m,mm\}["']/,
+              PATCH,
+            );
+
+            if (patched === content) {
+              // Regex did not match — log the actual source_files line for diagnosis
+              const srcLine = content.split('\n').find((l) => l.includes('source_files'));
+              console.warn(`[withKobitonSDK v5.1.0] ⚠ SliderPodspecFix regex did not match at: ${podspecPath}`);
+              console.warn(`[withKobitonSDK v5.1.0]   actual source_files line: ${srcLine ?? '(not found)'}`);
+            } else {
+              fs.writeFileSync(podspecPath, patched, 'utf8');
+              console.log(`[withKobitonSDK v5.1.0] ✓ Patched react-native-slider.podspec for Old Arch at: ${podspecPath}`);
+              totalPatched++;
+            }
+          } catch (e) {
+            console.warn(`[withKobitonSDK v5.1.0] ⚠ Failed to patch podspec at ${podspecPath}: ${e.message}`);
+          }
+        }
+      }
+
+      if (totalPatched === 0 && seen.size === 0) {
+        console.log('[withKobitonSDK v5.1.0] react-native-slider.podspec not found in any node_modules — podspec patch skipped (slider not installed)');
+      }
+
+      return mod;
+    },
+  ]);
+
   // ── Slider codegenConfig purge (EAS-safe: runs INSIDE expo prebuild) ────────
   // EAS does NOT execute eas.json prebuildCommand reliably.  To ensure Xcode
   // Codegen never sees slider's codegenConfig, remove it from node_modules
