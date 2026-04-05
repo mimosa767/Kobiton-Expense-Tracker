@@ -96,6 +96,9 @@ async function hasHardware(): Promise<boolean> {
  * Android: KobitonBiometricModule → com.kobiton.biometric.BiometricPrompt
  */
 async function authenticate(reason = 'Sign in to Kobiton Expense Tracker'): Promise<BiometricResult> {
+  console.log('[KOBITON-JS] authenticate called — platform:', Platform.OS);
+  console.log('[KOBITON-JS] KobitonBiometricModule:', NativeModules.KobitonBiometricModule != null ? 'FOUND' : 'NULL');
+  console.log('[KOBITON-JS] All Kobiton NativeModules:', Object.keys(NativeModules).filter(k => k.toLowerCase().includes('kobiton')));
   console.log(`[KobitonSDK] authenticate() called — platform=${Platform.OS} reason="${reason}"`);
 
   kobitonSDK.logEvent('biometric_prompt_triggered', 'info', {

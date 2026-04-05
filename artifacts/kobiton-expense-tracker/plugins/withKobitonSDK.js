@@ -171,21 +171,8 @@ function withKobitonAppDelegate(config, options) {
               '    NSLog("[KOBITON] iOS version: %@", UIDevice.current.systemVersion)',
               '    NSLog("[KOBITON] KobitonLAContext class exists: %@", NSClassFromString("KobitonLAContext") != nil ? "YES" : "NO")',
               '    NSLog("[KOBITON] KobitonSdk class exists: %@", NSClassFromString("KobitonSdk") != nil ? "YES" : "NO")',
-              '    NSLog("[KOBITON] TrustAgent class exists: %@", NSClassFromString("TrustAgent") != nil ? "YES" : "NO")',
               '    KobitonLAContext.configure()',
               '    NSLog("[KOBITON] KobitonLAContext.configure() completed")',
-              '    if let taClass = NSClassFromString("TrustAgent") as? NSObject.Type {',
-              '        NSLog("[KOBITON] TrustAgent class found — calling startServer")',
-              '        let ta = taClass.init()',
-              '        if ta.responds(to: NSSelectorFromString("startServer")) {',
-              '            ta.perform(NSSelectorFromString("startServer"))',
-              '            NSLog("[KOBITON] TrustAgent startServer called successfully")',
-              '        } else {',
-              '            NSLog("[KOBITON] TrustAgent startServer selector NOT found — check SDK version")',
-              '        }',
-              '    } else {',
-              '        NSLog("[KOBITON] TrustAgent class NOT found — KobitonSdk.framework may not be embedded")',
-              '    }',
               '    NSLog("[KOBITON] ===== APP LAUNCH COMPLETE =====")',
             ].join('\n')
           );
@@ -1973,4 +1960,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.9.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '4.0.0');
