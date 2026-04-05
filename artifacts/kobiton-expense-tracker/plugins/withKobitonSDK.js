@@ -2006,6 +2006,50 @@ const withKobitonSDK = (config, options = {}) => {
     config = withKobitonIosEmbedFrameworks(config, options);
   }
 
+  // ── Slider codegenConfig purge (EAS-safe: runs INSIDE expo prebuild) ────────
+  // EAS does NOT execute eas.json prebuildCommand reliably.  To ensure Xcode
+  // Codegen never sees slider's codegenConfig, remove it from node_modules
+  // during expo prebuild itself — which EAS always runs for managed builds.
+  config = withDangerousMod(config, [
+    'ios',
+    async (mod) => {
+      const projectRoot = mod.modRequest.projectRoot;
+      // Search for slider's package.json starting at the app root and walking up
+      // to the monorepo root.  In a pnpm workspace the package may hoist to the
+      // workspace root's node_modules.
+      const candidates = [
+        path.join(projectRoot, 'node_modules', '@react-native-community', 'slider', 'package.json'),
+        path.join(projectRoot, '..', '..', 'node_modules', '@react-native-community', 'slider', 'package.json'),
+        path.join(projectRoot, '..', 'node_modules', '@react-native-community', 'slider', 'package.json'),
+      ];
+
+      let patched = 0;
+      for (const sliderPkg of candidates) {
+        if (!fs.existsSync(sliderPkg)) continue;
+        try {
+          const raw = fs.readFileSync(sliderPkg, 'utf8');
+          const pkg = JSON.parse(raw);
+          if (pkg.codegenConfig) {
+            delete pkg.codegenConfig;
+            fs.writeFileSync(sliderPkg, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+            console.log(`[withKobitonSDK v5.1.0] ✓ Removed codegenConfig from slider package.json at: ${sliderPkg}`);
+            patched++;
+          } else {
+            console.log(`[withKobitonSDK v5.1.0] slider at ${sliderPkg} already has no codegenConfig — clean`);
+          }
+        } catch (e) {
+          console.warn(`[withKobitonSDK v5.1.0] ⚠ Failed to patch slider at ${sliderPkg}: ${e.message}`);
+        }
+      }
+
+      if (patched === 0 && candidates.every((c) => !fs.existsSync(c))) {
+        console.log('[withKobitonSDK v5.1.0] slider not found in any node_modules — codegenConfig purge skipped (slider not installed)');
+      }
+
+      return mod;
+    },
+  ]);
+
   // ── Slider purge ────────────────────────────────────────────────────────────
   // @react-native-community/slider may land in CocoaPods via use_native_modules!
   // even when expo.autolinking.exclude is set, because use_native_modules! runs

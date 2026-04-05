@@ -8,7 +8,6 @@
       "cache": {
         "disabled": true
       },
-      "prebuildCommand": "if [ -f scripts/patch-slider-codegen.js ]; then SDIR=scripts; else SDIR=artifacts/kobiton-expense-tracker/scripts; fi && node $SDIR/patch-slider-codegen.js && node $SDIR/assert-slider-clean.js && npx expo prebuild --clean",
       "android": {
         "buildType": "apk"
       },
@@ -24,7 +23,6 @@
       "cache": {
         "disabled": true
       },
-      "prebuildCommand": "if [ -f scripts/patch-slider-codegen.js ]; then SDIR=scripts; else SDIR=artifacts/kobiton-expense-tracker/scripts; fi && node $SDIR/patch-slider-codegen.js && node $SDIR/assert-slider-clean.js && npx expo prebuild --clean",
       "android": {
         "buildType": "apk"
       },
@@ -36,7 +34,6 @@
       }
     },
     "production": {
-      "prebuildCommand": "if [ -f scripts/patch-slider-codegen.js ]; then SDIR=scripts; else SDIR=artifacts/kobiton-expense-tracker/scripts; fi && node $SDIR/patch-slider-codegen.js && node $SDIR/assert-slider-clean.js && npx expo prebuild --clean",
       "android": {
         "buildType": "app-bundle"
       }
