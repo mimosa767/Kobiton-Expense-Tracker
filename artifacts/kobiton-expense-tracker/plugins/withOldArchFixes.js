@@ -1,5 +1,5 @@
 /**
- * withOldArchFixes — Expo Config Plugin v4.4.0
+ * withOldArchFixes — Expo Config Plugin v4.5.0
  *
  * Fixes @react-native-community/slider ≥ 5.0.0 compilation failure when
  * building with newArchEnabled: false (Old Architecture).
@@ -28,47 +28,45 @@
  *   Xcode matches against the full relative path (../../../node_modules/...),
  *   not just the filename. Bare filename silently matches nothing.
  *
- * Fix 3 — remove from Compile Sources via Podfile post_install:
- *   EAS caches the Pods directory (keyed by Podfile.lock). If the Pods
- *   directory was cached from a build without this fix, pod install (and
- *   therefore post_install) is skipped → hook never runs → broken cache
- *   served to Xcode.
+ * Fix 3 — post_install: removes file from Compile Sources build phase.
+ *   EAS caches the Pods directory keyed by Podfile.lock. The cached Pods were
+ *   built before this hook existed. EAS restores the cache and skips pod install
+ *   entirely — hook never fires.
  *
- * Fix 4 — withDangerousMod stubs the file in node_modules (previous attempt):
- *   The find command searched inside artifacts/kobiton-expense-tracker/ but
- *   the pnpm workspace stores node_modules at the WORKSPACE ROOT (two levels
- *   up, alongside pnpm-workspace.yaml). No files were found → no stub applied.
+ * Fix 4 — pre_install: removes file from pod file_accessors before Xcode
+ *   project generation. Same problem — EAS Pods cache is separate from
+ *   Podfile.lock; even a checksum change did not bust the cache in practice.
  *
  * --------------------------------------------------------------------------
- * CORRECT FIX (this version — v4.4.0)
+ * DEFINITIVE FIX (v4.5.0)
  * --------------------------------------------------------------------------
  *
- * LAYER 1 — pnpm patch (EAS-cache-immune):
- *   Root package.json pnpm.overrides forces slider@5.0.1 and
- *   pnpm.patchedDependencies registers patches/@react-native-community__slider@5.0.1.patch.
- *   The patch wraps RNCSliderComponentView.mm in #if RCT_NEW_ARCH_ENABLED.
- *   Applied during pnpm install itself — cannot be bypassed by any EAS cache.
+ * KEY INSIGHT: Even when EAS restores the Pods directory from cache and skips
+ * pod install entirely, Xcode still reads source files directly from
+ * node_modules — NOT from inside the Pods directory. The Pods directory only
+ * contains the Xcode project (references). The actual .mm files live in
+ * node_modules.
  *
- * LAYER 2 — withDangerousMod node_modules guard (corrected workspace root):
- *   Walk up from projectRoot to find the pnpm workspace root (via
- *   pnpm-workspace.yaml detection). Guard ALL RNCSliderComponentView.mm
- *   copies with #if RCT_NEW_ARCH_ENABLED / #endif so the file compiles to
- *   nothing in Old Architecture builds. Runs during expo prebuild.
+ * Therefore: zero out RNCSliderComponentView.mm in node_modules during
+ * expo prebuild (which ALWAYS runs, before pod install, before Xcode).
+ * Xcode compiles an empty stub → no error.
  *
- * LAYER 3 — Podfile pre_install hook (cache-busting + correct Xcode project):
- *   Injects a pre_install block into the Podfile that removes
- *   RNCSliderComponentView.mm from the slider pod's file_accessors BEFORE
- *   the Xcode project is generated. This means the file is never in the
- *   Compile Sources build phase in the generated .xcodeproj.
+ * LAYER 0 — Zero out the file in node_modules (PRIMARY, cache-immune):
+ *   Search EAS build machine path (/Users/expo/workingdir/build/node_modules)
+ *   AND the workspace root node_modules. Overwrite every found copy with a
+ *   1-line stub comment. Runs during expo prebuild, before everything else.
  *
- *   CRITICAL: Adding any code to the Podfile changes its SHA1, which changes
- *   the PODFILE CHECKSUM entry in Podfile.lock. EAS keys Pods cache by
- *   Podfile.lock content, so a checksum change forces a fresh pod install,
- *   which runs our pre_install hook — busting any stale cached Pods.
+ * LAYER 1 — pnpm patch (belt-and-suspenders):
+ *   Root package.json pnpm.overrides + pnpm.patchedDependencies wraps the
+ *   file in #if RCT_NEW_ARCH_ENABLED during pnpm install.
  *
- * LAYER 4 — Podfile post_install hook (belt-and-suspenders):
- *   Also removes the file from the Compile Sources build phase in post_install
- *   for any edge case where pre_install did not catch it.
+ * LAYER 2 — Podfile pre_install hook:
+ *   Removes the file from the slider pod's file_accessors before the Xcode
+ *   project is generated (runs when pod install is not cached).
+ *
+ * LAYER 3 — Podfile post_install hook:
+ *   Removes the file from the Compile Sources build phase in post_install
+ *   (runs when pod install is not cached).
  */
 
 const { withDangerousMod } = require('@expo/config-plugins');
@@ -78,15 +76,14 @@ const { execSync } = require('child_process');
 
 const PRE_INSTALL_MARKER = '# [OldArchFix v4.4.0] pre_install: remove RNCSliderComponentView.mm';
 const POST_INSTALL_MARKER = '# [OldArchFix] Remove RNCSliderComponentView.mm from Compile Sources';
-const STUB_GUARD_MARKER = '// [OldArchFix] guarded for Old Architecture compatibility';
+
+const EMPTY_STUB =
+  '// [OldArchFix v4.5.0] RNCSliderComponentView.mm zeroed out for Old Architecture compatibility.\n' +
+  '// This file uses Fabric (New Architecture) APIs that are not available in Old Architecture builds.\n' +
+  '// Zeroed by withOldArchFixes.js during expo prebuild.\n';
 
 // ─── Workspace root detection ────────────────────────────────────────────────
 
-/**
- * Walk up from startDir until we find a directory that looks like the pnpm
- * workspace root (has pnpm-workspace.yaml, or package.json + pnpm-lock.yaml).
- * Falls back to startDir if nothing found within 6 levels.
- */
 function findWorkspaceRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 6; i++) {
@@ -98,78 +95,74 @@ function findWorkspaceRoot(startDir) {
       return dir;
     }
     const parent = path.dirname(dir);
-    if (parent === dir) break; // filesystem root
+    if (parent === dir) break;
     dir = parent;
   }
   return startDir;
 }
 
-// ─── Layer 2: node_modules #if guard (expo prebuild, runs before pod install) ─
+// ─── Layer 0: Zero out the file in all node_modules locations ────────────────
+//
+// This is the PRIMARY, cache-immune fix. Xcode reads source files from
+// node_modules directly — even when Pods are cached. Overwriting the file
+// here guarantees Xcode compiles an empty stub, regardless of cache state.
 
-function stubSliderFabricFile(projectRoot) {
+function zeroOutSliderFabricFile(projectRoot) {
   const wsRoot = findWorkspaceRoot(projectRoot);
-  console.log('[OldArchFix] Workspace root detected: ' + wsRoot);
 
-  const searchRoots = [...new Set([wsRoot, projectRoot])];
+  // All paths to search — include the hardcoded EAS build machine path first.
+  const searchRoots = [
+    '/Users/expo/workingdir/build/node_modules',  // EAS Mac build machine
+    path.join(wsRoot, 'node_modules'),             // pnpm workspace root
+    path.join(projectRoot, 'node_modules'),        // project root fallback
+  ].filter((p, i, arr) => arr.indexOf(p) === i);  // deduplicate
+
+  console.log('[OldArchFix v4.5.0] Zeroing out RNCSliderComponentView.mm');
+  console.log('[OldArchFix] Search roots: ' + searchRoots.join(', '));
 
   let found = 0;
+
   for (const searchRoot of searchRoots) {
-    const nmDir = path.join(searchRoot, 'node_modules');
-    if (!fs.existsSync(nmDir)) continue;
+    if (!fs.existsSync(searchRoot)) {
+      console.log('[OldArchFix] ✗ Not found: ' + searchRoot);
+      continue;
+    }
 
     let files = [];
     try {
       const result = execSync(
-        'find "' + nmDir + '" -name "RNCSliderComponentView.mm" ' +
-          '-path "*/@react-native-community/slider/*" 2>/dev/null',
-        { encoding: 'utf8', timeout: 20000 }
+        'find "' + searchRoot + '" -name "RNCSliderComponentView.mm" 2>/dev/null',
+        { encoding: 'utf8', timeout: 30000 }
       );
       files = result.trim().split('\n').filter(Boolean);
     } catch (_) {
-      // find returned non-zero (no matches) or timed out
+      // find returned non-zero or timed out — no files found
     }
 
-    for (const absPath of files) {
+    for (const filePath of files) {
       try {
-        const original = fs.readFileSync(absPath, 'utf8');
-
-        if (original.includes(STUB_GUARD_MARKER)) {
-          console.log('[OldArchFix] ✓ Already guarded: ' + absPath);
+        const existing = fs.readFileSync(filePath, 'utf8');
+        if (existing === EMPTY_STUB) {
+          console.log('[OldArchFix] ✓ Already zeroed: ' + filePath);
           found++;
           continue;
         }
-
-        const guarded =
-          STUB_GUARD_MARKER + '\n' +
-          '// RNCSliderComponentView.mm uses Fabric (New Architecture) APIs.\n' +
-          '// Guarded by withOldArchFixes.js for Old Architecture builds.\n' +
-          '#if RCT_NEW_ARCH_ENABLED\n' +
-          original +
-          '\n#endif // RCT_NEW_ARCH_ENABLED\n';
-
-        fs.writeFileSync(absPath, guarded, 'utf8');
-        console.log('[OldArchFix] ✓ Guarded with #if RCT_NEW_ARCH_ENABLED: ' + absPath);
+        fs.writeFileSync(filePath, EMPTY_STUB, 'utf8');
+        console.log('[OldArchFix] ✓ Zeroed out: ' + filePath);
         found++;
       } catch (err) {
-        console.warn('[OldArchFix] ⚠ Could not guard ' + absPath + ': ' + err.message);
+        console.warn('[OldArchFix] ⚠ Could not zero out ' + filePath + ': ' + err.message);
       }
     }
   }
 
   if (found === 0) {
-    console.log(
-      '[OldArchFix] ℹ  RNCSliderComponentView.mm not found under any node_modules root. ' +
-        'Searched: ' + searchRoots.join(', ')
-    );
+    console.log('[OldArchFix] ℹ  RNCSliderComponentView.mm not found in any search root.');
+    console.log('[OldArchFix] ℹ  This is OK if pnpm overrides + patch removed slider@5.x entirely.');
   }
 }
 
-// ─── Layer 3: Podfile pre_install hook ───────────────────────────────────────
-//
-// Injected before the post_install block. Removes RNCSliderComponentView.mm
-// from the slider pod's file_accessors BEFORE the Xcode project is generated.
-// Adding any new code to the Podfile changes its SHA1, which changes the
-// PODFILE CHECKSUM in Podfile.lock, busting the EAS Pods cache.
+// ─── Layer 2: Podfile pre_install hook ───────────────────────────────────────
 
 function patchPodfilePreInstall(podfilePath) {
   if (!fs.existsSync(podfilePath)) {
@@ -187,10 +180,8 @@ function patchPodfilePreInstall(podfilePath) {
   const preInstallBlock = [
     ``,
     `${PRE_INSTALL_MARKER}`,
-    `# Removes the Fabric-only component view from the slider pod's source file list`,
-    `# BEFORE the Xcode project is generated — so it is never in Compile Sources.`,
-    `# Adding this block changes the Podfile SHA1, which changes the PODFILE CHECKSUM`,
-    `# in Podfile.lock, forcing EAS to bust its Pods cache and run pod install fresh.`,
+    `# Removes RNCSliderComponentView.mm from slider pod file_accessors BEFORE`,
+    `# the Xcode project is generated — file never enters Compile Sources.`,
     `pre_install do |installer|`,
     `  slider_pod = installer.pod_targets.find { |t| t.name == 'react-native-slider' }`,
     `  if slider_pod`,
@@ -203,7 +194,6 @@ function patchPodfilePreInstall(podfilePath) {
     ``,
   ].join('\n');
 
-  // Inject immediately before post_install — handles any indentation level
   const before = podfile;
   podfile = podfile.replace(/([ \t]*post_install do)/, `${preInstallBlock}$1`);
 
@@ -211,11 +201,11 @@ function patchPodfilePreInstall(podfilePath) {
     console.warn('[OldArchFix] ⚠ Could not inject pre_install block into Podfile');
   } else {
     fs.writeFileSync(podfilePath, podfile, 'utf8');
-    console.log('[OldArchFix] ✓ Injected pre_install block into Podfile (cache-busting)');
+    console.log('[OldArchFix] ✓ Injected pre_install block into Podfile');
   }
 }
 
-// ─── Layer 4: Podfile post_install hook (belt-and-suspenders) ────────────────
+// ─── Layer 3: Podfile post_install hook ──────────────────────────────────────
 
 function patchPodfilePostInstall(podfilePath) {
   if (!fs.existsSync(podfilePath)) {
@@ -269,8 +259,13 @@ function withOldArchFixes(config) {
       const projectRoot = mod.modRequest.projectRoot;
       const podfilePath = path.join(mod.modRequest.platformProjectRoot, 'Podfile');
 
-      stubSliderFabricFile(projectRoot);
+      // Layer 0: zero out the file in node_modules (PRIMARY — runs first)
+      zeroOutSliderFabricFile(projectRoot);
+
+      // Layer 2: pre_install hook (runs when pod install is not cached)
       patchPodfilePreInstall(podfilePath);
+
+      // Layer 3: post_install hook (belt-and-suspenders)
       patchPodfilePostInstall(podfilePath);
 
       return mod;
