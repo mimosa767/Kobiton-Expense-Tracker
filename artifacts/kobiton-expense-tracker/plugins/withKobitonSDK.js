@@ -165,22 +165,28 @@ function withKobitonAppDelegate(config, options) {
             /(didFinishLaunchingWithOptions[\s\S]*?\) -> Bool \{)/,
             [
               '$1',
-              '    NSLog("[DIAG] didFinishLaunching — process=%@ bundle=%@", ProcessInfo.processInfo.processName, Bundle.main.bundleIdentifier ?? "nil")',
-              '    NSLog("[DIAG] KobitonLAContext class loaded: %@", NSStringFromClass(KobitonLAContext.self))',
+              '    NSLog("[KOBITON] ===== APP LAUNCH START =====")',
+              '    NSLog("[KOBITON] Process: %@", ProcessInfo.processInfo.processName)',
+              '    NSLog("[KOBITON] Bundle: %@", Bundle.main.bundleIdentifier ?? "nil")',
+              '    NSLog("[KOBITON] iOS version: %@", UIDevice.current.systemVersion)',
+              '    NSLog("[KOBITON] KobitonLAContext class exists: %@", NSClassFromString("KobitonLAContext") != nil ? "YES" : "NO")',
+              '    NSLog("[KOBITON] KobitonSdk class exists: %@", NSClassFromString("KobitonSdk") != nil ? "YES" : "NO")',
+              '    NSLog("[KOBITON] TrustAgent class exists: %@", NSClassFromString("TrustAgent") != nil ? "YES" : "NO")',
               '    KobitonLAContext.configure()',
-              '    NSLog("[DIAG] KobitonLAContext.configure() returned")',
-              '    print("[KobitonSDK] configure called")',
+              '    NSLog("[KOBITON] KobitonLAContext.configure() completed")',
               '    if let taClass = NSClassFromString("TrustAgent") as? NSObject.Type {',
+              '        NSLog("[KOBITON] TrustAgent class found — calling startServer")',
               '        let ta = taClass.init()',
               '        if ta.responds(to: NSSelectorFromString("startServer")) {',
               '            ta.perform(NSSelectorFromString("startServer"))',
-              '            print("[KobitonSDK] TrustAgent startServer called")',
+              '            NSLog("[KOBITON] TrustAgent startServer called successfully")',
               '        } else {',
-              '            print("[KobitonSDK] TrustAgent startServer selector not found")',
+              '            NSLog("[KOBITON] TrustAgent startServer selector NOT found — check SDK version")',
               '        }',
               '    } else {',
-              '        print("[KobitonSDK] TrustAgent class not found")',
+              '        NSLog("[KOBITON] TrustAgent class NOT found — KobitonSdk.framework may not be embedded")',
               '    }',
+              '    NSLog("[KOBITON] ===== APP LAUNCH COMPLETE =====")',
             ].join('\n')
           );
 
@@ -1779,27 +1785,23 @@ function withKobitonIosBiometricNativeModule(config, options) {
   class KobitonBiometricModule: NSObject {
 
     @objc func isAvailable(_ resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
-      NSLog("[KobitonSDK] isAvailable called")
+      NSLog("[KOBITON] isAvailable called")
       let context = KobitonLAContext()
+      NSLog("[KOBITON] KobitonLAContext instance class: %@", NSStringFromClass(type(of: context)))
       var error: NSError?
       let available = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
-      NSLog("[KobitonSDK] isAvailable: \\(available)")
+      NSLog("[KOBITON] isAvailable result: %@ error: %@", available ? "YES" : "NO", error?.localizedDescription ?? "nil")
       resolve(available)
     }
 
     @objc func authenticate(_ reason: String, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
-      NSLog("[KobitonSDK] authenticate called — reason: \\(reason)")
+      NSLog("[KOBITON] authenticate called — reason: %@", reason)
       let context = KobitonLAContext()
+      NSLog("[KOBITON] KobitonLAContext instance class: %@", NSStringFromClass(type(of: context)))
       context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
         DispatchQueue.main.async {
-          NSLog("[KobitonSDK] authenticate result: \\(success)")
-          if success {
-            resolve(["success": true])
-          } else {
-            let msg = error?.localizedDescription ?? "Authentication failed"
-            NSLog("[KobitonSDK] authenticate error: \\(msg)")
-            resolve(["success": false, "error": msg])
-          }
+          NSLog("[KOBITON] authenticate result — success: %@ error: %@", success ? "YES" : "NO", error?.localizedDescription ?? "nil")
+          resolve(["success": success])
         }
       }
     }
@@ -1971,4 +1973,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.8.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.9.0');

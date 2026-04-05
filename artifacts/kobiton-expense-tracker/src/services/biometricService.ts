@@ -20,23 +20,14 @@ export type BiometricResult =
  */
 
 // ── Module availability diagnostic (runs at import time) ──────────────────
-const allNativeModuleKeys = Object.keys(NativeModules);
-console.log(`[KobitonSDK] NativeModules available at import: [${allNativeModuleKeys.join(', ')}]`);
+console.log('[KOBITON-JS] biometricService loaded — platform:', Platform.OS);
+console.log('[KOBITON-JS] KobitonBiometricModule:', NativeModules.KobitonBiometricModule != null ? 'FOUND' : 'NULL');
+console.log('[KOBITON-JS] All NativeModules:', Object.keys(NativeModules).filter(k => k.toLowerCase().includes('kobiton')));
 
 const KobitonBiometricModule: {
   isAvailable: () => Promise<boolean>;
   authenticate: (reason: string) => Promise<{ success: boolean; error?: string }>;
 } | null = NativeModules.KobitonBiometricModule ?? null;
-
-if (Platform.OS === 'android') {
-  if (KobitonBiometricModule) {
-    console.log('[KobitonSDK] ✅ Android — NativeModules.KobitonBiometricModule FOUND');
-  } else {
-    console.warn('[KobitonSDK] ⚠ Android — NativeModules.KobitonBiometricModule is NULL');
-  }
-} else if (Platform.OS === 'ios') {
-  console.log(`[KobitonSDK] iOS — NativeModules.KobitonBiometricModule=${KobitonBiometricModule != null ? 'FOUND ✅' : 'null ❌ — biometrics will not work'}`);
-}
 
 async function isAvailable(): Promise<boolean> {
   if (Platform.OS === 'web') return false;
