@@ -50,6 +50,7 @@
           "cameraPermissionText": "Allow Kobiton Expense Tracker to capture receipt photos."
         }
       ],
+      "./plugins/withOldArchFixes",
       [
         "./plugins/withKobitonSDK",
         {
