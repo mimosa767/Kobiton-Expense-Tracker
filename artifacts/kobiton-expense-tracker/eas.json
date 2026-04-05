@@ -9,7 +9,8 @@
         "buildType": "apk"
       },
       "ios": {
-        "simulator": false
+        "simulator": false,
+        "prebuildCommand": "npx expo prebuild --clean && find node_modules -name 'RNCSliderComponentView.mm' -exec sh -c 'echo \"// [OldArchFix v4.5.0] zeroed for Old Architecture\" > \"$1\"' _ {} \\;"
       }
     },
     "simulator": {
@@ -18,7 +19,8 @@
         "buildType": "apk"
       },
       "ios": {
-        "simulator": true
+        "simulator": true,
+        "prebuildCommand": "npx expo prebuild --clean && find node_modules -name 'RNCSliderComponentView.mm' -exec sh -c 'echo \"// [OldArchFix v4.5.0] zeroed for Old Architecture\" > \"$1\"' _ {} \\;"
       }
     },
     "production": {
