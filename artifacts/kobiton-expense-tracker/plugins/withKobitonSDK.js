@@ -1951,7 +1951,7 @@ function withKobitonIosEmbedFrameworks(config, options) {
 // ─── Main plugin ─────────────────────────────────────────────────────────────
 
 const withKobitonSDK = (config, options = {}) => {
-  console.log('[withKobitonSDK v5.0.0] EXECUTING — @react-native-community/slider REMOVED — options:', JSON.stringify(options));
+  console.log('[withKobitonSDK v5.1.0] EXECUTING — slider blocked via react-native.config.js + Podfile scrub — options:', JSON.stringify(options));
   config = withKobitonPod(config);
   config = withKobitonInfoPlist(config, options);
   config = withKobitonAppDelegate(config, options);
@@ -2006,7 +2006,34 @@ const withKobitonSDK = (config, options = {}) => {
     config = withKobitonIosEmbedFrameworks(config, options);
   }
 
+  // ── Slider purge ────────────────────────────────────────────────────────────
+  // @react-native-community/slider was removed from package.json, but EAS may
+  // restore a stale node_modules cache that still contains slider@5.1.2.
+  // react-native.config.js disables autolinking for slider, but as a second
+  // safety net we also strip any `react-native-slider` pod lines from the
+  // generated Podfile so it can never reach the Xcode build step.
+  config = withDangerousMod(config, [
+    'ios',
+    async (mod) => {
+      const podfilePath = path.join(mod.modRequest.platformProjectRoot, 'Podfile');
+      if (fs.existsSync(podfilePath)) {
+        const before = fs.readFileSync(podfilePath, 'utf8');
+        const after = before
+          .split('\n')
+          .filter((line) => !line.includes('react-native-slider'))
+          .join('\n');
+        if (before !== after) {
+          fs.writeFileSync(podfilePath, after);
+          console.log('[withKobitonSDK v5.1.0] Stripped stale react-native-slider from Podfile');
+        } else {
+          console.log('[withKobitonSDK v5.1.0] Podfile clean — no react-native-slider entry found');
+        }
+      }
+      return mod;
+    },
+  ]);
+
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '5.0.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '5.1.0');
