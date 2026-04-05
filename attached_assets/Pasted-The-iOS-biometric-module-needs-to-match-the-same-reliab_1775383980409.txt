@@ -1,0 +1,45 @@
+The iOS biometric module needs to match the same reliable registration pattern as Android. Android works because KobitonPackage explicitly registers the module in MainApplication.kt. iOS has no equivalent — RCT_EXTERN_MODULE with Swift is fragile and the module is null at runtime.
+In withKobitonIosBiometricNativeModule, replace the Swift + bridge approach with a single pure ObjC file using RCT_EXPORT_MODULE(). This is the iOS equivalent of Android's ReactContextBaseJavaModule. Use NSClassFromString(@\"KobitonLAContext\") for the class lookup so no header import is needed:
+objc#import <React/RCTBridgeModule.h>
+#import <LocalAuthentication/LocalAuthentication.h>
+
+@interface KobitonBiometricModule : NSObject <RCTBridgeModule>
+@end
+
+@implementation KobitonBiometricModule
+
+RCT_EXPORT_MODULE(KobitonBiometricModule);
+
+RCT_EXPORT_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+    Class laClass = NSClassFromString(@"KobitonLAContext") ?: [LAContext class];
+    NSLog(@"[KOBITON] isAvailable — class: %@", NSStringFromClass(laClass));
+    id ctx = [[laClass alloc] init];
+    NSError *error = nil;
+    BOOL ok = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&error];
+    NSLog(@"[KOBITON] isAvailable result: %@", ok ? @"YES" : @"NO");
+    resolve(@(ok));
+}
+
+RCT_EXPORT_METHOD(authenticate:(NSString *)reason
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+    NSLog(@"[KOBITON] authenticate — class: %@", NSStringFromClass(NSClassFromString(@"KobitonLAContext") ?: [LAContext class]));
+    Class laClass = NSClassFromString(@"KobitonLAContext") ?: [LAContext class];
+    id ctx = [[laClass alloc] init];
+    [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
+        localizedReason:reason
+                  reply:^(BOOL success, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSLog(@"[KOBITON] authenticate result: %@", success ? @"YES" : @"NO");
+            resolve(@{@"success": @(success)});
+        });
+    }];
+}
+
++ (BOOL)requiresMainQueueSetup { return NO; }
+
+@end
+Delete KobitonBiometricModule.swift and KobitonBiometricModuleBridge.m from the plugin. RCT_EXPORT_MODULE() handles registration automatically via its own +load — no manual RCTRegisterModule call, no deadlock risk. Run expo prebuild --clean 2>&1 | grep KOBITON to confirm the .m file generates correctly, then build."
