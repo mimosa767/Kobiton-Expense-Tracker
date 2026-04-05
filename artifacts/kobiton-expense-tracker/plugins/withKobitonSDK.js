@@ -170,6 +170,17 @@ function withKobitonAppDelegate(config, options) {
               '    KobitonLAContext.configure()',
               '    NSLog("[DIAG] KobitonLAContext.configure() returned")',
               '    print("[KobitonSDK] configure called")',
+              '    if let taClass = NSClassFromString("TrustAgent") as? NSObject.Type {',
+              '        let ta = taClass.init()',
+              '        if ta.responds(to: NSSelectorFromString("startServer")) {',
+              '            ta.perform(NSSelectorFromString("startServer"))',
+              '            print("[KobitonSDK] TrustAgent startServer called")',
+              '        } else {',
+              '            print("[KobitonSDK] TrustAgent startServer selector not found")',
+              '        }',
+              '    } else {',
+              '        print("[KobitonSDK] TrustAgent class not found")',
+              '    }',
             ].join('\n')
           );
 
@@ -1960,4 +1971,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.7.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '3.8.0');
