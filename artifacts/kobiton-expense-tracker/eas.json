@@ -6,31 +6,34 @@
     "preview": {
       "distribution": "internal",
       "cache": {
-        "key": "v2-no-slider"
+        "disabled": true
       },
       "android": {
         "buildType": "apk"
       },
       "ios": {
-        "simulator": false
+        "simulator": false,
+        "cache": {
+          "disabled": true
+        }
       }
     },
     "simulator": {
       "distribution": "internal",
       "cache": {
-        "key": "v2-no-slider"
+        "disabled": true
       },
       "android": {
         "buildType": "apk"
       },
       "ios": {
-        "simulator": true
+        "simulator": true,
+        "cache": {
+          "disabled": true
+        }
       }
     },
     "production": {
-      "cache": {
-        "key": "v2-no-slider"
-      },
       "android": {
         "buildType": "app-bundle"
       }
