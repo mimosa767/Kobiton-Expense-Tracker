@@ -5,6 +5,9 @@
   "build": {
     "preview": {
       "distribution": "internal",
+      "cache": {
+        "key": "v2-no-slider"
+      },
       "android": {
         "buildType": "apk"
       },
@@ -14,6 +17,9 @@
     },
     "simulator": {
       "distribution": "internal",
+      "cache": {
+        "key": "v2-no-slider"
+      },
       "android": {
         "buildType": "apk"
       },
@@ -22,6 +28,9 @@
       }
     },
     "production": {
+      "cache": {
+        "key": "v2-no-slider"
+      },
       "android": {
         "buildType": "app-bundle"
       }
