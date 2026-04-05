@@ -8,6 +8,7 @@
       "cache": {
         "disabled": true
       },
+      "prebuildCommand": "node artifacts/kobiton-expense-tracker/scripts/patch-slider-codegen.js && npx expo prebuild --clean",
       "android": {
         "buildType": "apk"
       },
@@ -23,6 +24,7 @@
       "cache": {
         "disabled": true
       },
+      "prebuildCommand": "node artifacts/kobiton-expense-tracker/scripts/patch-slider-codegen.js && npx expo prebuild --clean",
       "android": {
         "buildType": "apk"
       },
@@ -34,6 +36,7 @@
       }
     },
     "production": {
+      "prebuildCommand": "node artifacts/kobiton-expense-tracker/scripts/patch-slider-codegen.js && npx expo prebuild --clean",
       "android": {
         "buildType": "app-bundle"
       }
