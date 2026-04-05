@@ -5,22 +5,22 @@
   "build": {
     "preview": {
       "distribution": "internal",
+      "prebuildCommand": "npx expo prebuild --clean && find /Users/expo/workingdir/build/node_modules -name 'RNCSliderComponentView.mm' 2>/dev/null | while read f; do echo '// [OldArchFix] zeroed for Old Architecture' > \"$f\" && echo \"[OldArchFix] zeroed: $f\"; done",
       "android": {
         "buildType": "apk"
       },
       "ios": {
-        "simulator": false,
-        "prebuildCommand": "npx expo prebuild --clean && find /Users/expo/workingdir/build/node_modules -name 'RNCSliderComponentView.mm' 2>/dev/null | while read f; do echo '// [OldArchFix] zeroed for Old Architecture' > \"$f\" && echo \"[OldArchFix] zeroed: $f\"; done"
+        "simulator": false
       }
     },
     "simulator": {
       "distribution": "internal",
+      "prebuildCommand": "npx expo prebuild --clean && find /Users/expo/workingdir/build/node_modules -name 'RNCSliderComponentView.mm' 2>/dev/null | while read f; do echo '// [OldArchFix] zeroed for Old Architecture' > \"$f\" && echo \"[OldArchFix] zeroed: $f\"; done",
       "android": {
         "buildType": "apk"
       },
       "ios": {
-        "simulator": true,
-        "prebuildCommand": "npx expo prebuild --clean && find /Users/expo/workingdir/build/node_modules -name 'RNCSliderComponentView.mm' 2>/dev/null | while read f; do echo '// [OldArchFix] zeroed for Old Architecture' > \"$f\" && echo \"[OldArchFix] zeroed: $f\"; done"
+        "simulator": true
       }
     },
     "production": {
