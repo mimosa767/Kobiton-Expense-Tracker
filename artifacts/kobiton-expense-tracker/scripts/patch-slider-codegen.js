@@ -28,6 +28,9 @@ function log(msg) {
 const candidateRoots = new Set();
 candidateRoots.add(process.cwd());
 
+// Confirmed EAS build path — explicit fallback in case process.cwd() differs
+candidateRoots.add('/Users/expo/workingdir/build');
+
 let dir = __dirname;
 for (let i = 0; i < 6; i++) {
   candidateRoots.add(dir);
