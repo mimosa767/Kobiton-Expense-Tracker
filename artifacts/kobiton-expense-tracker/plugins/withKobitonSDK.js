@@ -1777,7 +1777,16 @@ function withKobitonIosBiometricNativeModule(config, options) {
 
 @implementation KobitonBiometricModule
 
-RCT_EXPORT_MODULE(KobitonBiometricModule);
++ (NSString *)moduleName { return @"KobitonBiometricModule"; }
+
++ (void)load {
+    RCTRegisterModule(self);
+}
+
+- (NSDictionary *)constantsToExport {
+    NSLog(@"[KOBITON-NATIVE] KobitonBiometricModule constantsToExport called");
+    return @{@"registered": @YES};
+}
 
 RCT_EXPORT_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
@@ -1953,4 +1962,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '4.1.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '4.2.0');

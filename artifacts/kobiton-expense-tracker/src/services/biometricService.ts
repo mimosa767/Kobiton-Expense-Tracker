@@ -23,6 +23,7 @@ export type BiometricResult =
 console.log('[KOBITON-JS] biometricService loaded — platform:', Platform.OS);
 console.log('[KOBITON-JS] KobitonBiometricModule:', NativeModules.KobitonBiometricModule != null ? 'FOUND' : 'NULL');
 console.log('[KOBITON-JS] All NativeModules:', Object.keys(NativeModules).filter(k => k.toLowerCase().includes('kobiton')));
+console.log('[KOBITON-JS] iOS KobitonBiometricModule constants:', NativeModules.KobitonBiometricModule?.registered);
 
 const KobitonBiometricModule: {
   isAvailable: () => Promise<boolean>;
