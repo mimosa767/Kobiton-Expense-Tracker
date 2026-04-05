@@ -2007,28 +2007,82 @@ const withKobitonSDK = (config, options = {}) => {
   }
 
   // ── Slider purge ────────────────────────────────────────────────────────────
-  // @react-native-community/slider was removed from package.json, but EAS may
-  // restore a stale node_modules cache that still contains slider@5.1.2.
-  // react-native.config.js disables autolinking for slider, but as a second
-  // safety net we also strip any `react-native-slider` pod lines from the
-  // generated Podfile so it can never reach the Xcode build step.
+  // @react-native-community/slider may land in CocoaPods via use_native_modules!
+  // even when expo.autolinking.exclude is set, because use_native_modules! runs
+  // dynamically during `pod install` — AFTER expo prebuild has exited.
+  //
+  // Two-pronged defence:
+  //   A) Precise line filter: remove any explicit `pod 'react-native-slider'`
+  //      declaration lines.  The previous broad filter (line.includes('react-native-slider'))
+  //      incorrectly stripped lines INSIDE the post_install block (reference strings),
+  //      breaking Ruby syntax.  The fresh Expo-generated Podfile has no explicit slider
+  //      pod line, so this is an edge-case safety net only.
+  //
+  //   B) post_install injection: inject Ruby code into the existing post_install block
+  //      that removes RNCSliderComponentView.mm from slider's Xcode compile sources.
+  //      This is the proven fix (from the original OldArchFixes approach).
+  //      RNCSliderComponentView.mm is a Fabric-only file that fails to compile in Old
+  //      Arch mode because it unconditionally includes <react/renderer/...> headers.
+  //      Removing it from compile sources sidesteps the error entirely, regardless of
+  //      how slider entered the CocoaPods project.
   config = withDangerousMod(config, [
     'ios',
     async (mod) => {
       const podfilePath = path.join(mod.modRequest.platformProjectRoot, 'Podfile');
-      if (fs.existsSync(podfilePath)) {
-        const before = fs.readFileSync(podfilePath, 'utf8');
-        const after = before
-          .split('\n')
-          .filter((line) => !line.includes('react-native-slider'))
-          .join('\n');
-        if (before !== after) {
-          fs.writeFileSync(podfilePath, after);
-          console.log('[withKobitonSDK v5.1.0] Stripped stale react-native-slider from Podfile');
-        } else {
-          console.log('[withKobitonSDK v5.1.0] Podfile clean — no react-native-slider entry found');
-        }
+      if (!fs.existsSync(podfilePath)) {
+        console.log('[withKobitonSDK v5.1.0] Podfile not found — skipping slider purge');
+        return mod;
       }
+
+      let content = fs.readFileSync(podfilePath, 'utf8');
+      const original = content;
+
+      // ── A: Precise line filter ──────────────────────────────────────────────
+      const linesBefore = content.split('\n');
+      const linesAfter = linesBefore.filter(
+        (line) => !/\bpod\s+['"]react-native-slider['"]/.test(line),
+      );
+      if (linesAfter.length < linesBefore.length) {
+        console.log(
+          `[withKobitonSDK v5.1.0] Stripped ${linesBefore.length - linesAfter.length} explicit pod 'react-native-slider' declaration line(s)`,
+        );
+        content = linesAfter.join('\n');
+      } else {
+        console.log(
+          '[withKobitonSDK v5.1.0] No explicit pod react-native-slider declaration found (expected — slider is added dynamically by use_native_modules!)',
+        );
+      }
+
+      // ── B: post_install injection ───────────────────────────────────────────
+      const POST_INSTALL_MARKER = 'post_install do |installer|';
+      const SLIDER_FIX_GUARD    = '[SliderFix v5.1.0]';
+      const SLIDER_FIX_RUBY = [
+        '    # ' + SLIDER_FIX_GUARD + ' Remove Fabric-only file from Old Arch build.',
+        '    # RNCSliderComponentView.mm requires New Arch headers; removing it from',
+        '    # compile sources prevents the build error regardless of how slider was added.',
+        '    installer.pods_project.targets.each do |__sf_t__|',
+        "      next unless __sf_t__.name == 'react-native-slider'",
+        '      __sf_files__ = __sf_t__.source_build_phase.files.select { |bf|',
+        "        bf.file_ref&.path&.end_with?('RNCSliderComponentView.mm')",
+        '      }',
+        '      __sf_files__.each { |bf| __sf_t__.source_build_phase.files.delete(bf) }',
+        "      puts \"[SliderFix] removed \#{__sf_files__.length} RNCSliderComponentView file(s) from react-native-slider compile sources\"",
+        '    end',
+      ].join('\n');
+
+      if (content.includes(POST_INSTALL_MARKER) && !content.includes(SLIDER_FIX_GUARD)) {
+        content = content.replace(POST_INSTALL_MARKER, `${POST_INSTALL_MARKER}\n${SLIDER_FIX_RUBY}`);
+        console.log('[withKobitonSDK v5.1.0] ✓ Injected SliderFix post_install block into Podfile');
+      } else if (content.includes(SLIDER_FIX_GUARD)) {
+        console.log('[withKobitonSDK v5.1.0] SliderFix post_install block already present — skipping injection');
+      } else {
+        console.log('[withKobitonSDK v5.1.0] WARNING: no post_install block found in Podfile — could not inject SliderFix');
+      }
+
+      if (content !== original) {
+        fs.writeFileSync(podfilePath, content);
+      }
+
       return mod;
     },
   ]);
