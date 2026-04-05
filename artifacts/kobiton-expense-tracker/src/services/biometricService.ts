@@ -26,7 +26,7 @@ console.log(`[KobitonSDK] NativeModules available at import: [${allNativeModuleK
 const KobitonBiometricModule: {
   isAvailable: () => Promise<boolean>;
   authenticate: (reason: string) => Promise<{ success: boolean; error?: string }>;
-} | null = Platform.OS === 'android' ? (NativeModules.KobitonBiometricModule ?? null) : null;
+} | null = NativeModules.KobitonBiometricModule ?? null;
 
 if (Platform.OS === 'android') {
   if (KobitonBiometricModule) {
@@ -35,9 +35,7 @@ if (Platform.OS === 'android') {
     console.warn('[KobitonSDK] ⚠ Android — NativeModules.KobitonBiometricModule is NULL');
   }
 } else if (Platform.OS === 'ios') {
-  const iosModule = NativeModules.KobitonBiometricModule;
-  console.log(`[KobitonSDK] iOS — NativeModules.KobitonBiometricModule=${iosModule != null ? 'FOUND (unexpected — should be native intercept only)' : 'null (expected)'}`);
-  console.log('[KobitonSDK] iOS — path: expo-local-authentication → LAContext → KobitonLAContext.framework intercept');
+  console.log(`[KobitonSDK] iOS — NativeModules.KobitonBiometricModule=${KobitonBiometricModule != null ? 'FOUND ✅' : 'null ❌ — biometrics will not work'}`);
 }
 
 async function isAvailable(): Promise<boolean> {
