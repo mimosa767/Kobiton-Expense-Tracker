@@ -41,6 +41,8 @@
         "buildType": "app-bundle"
       },
       "ios": {
+        "credentialsSource": "remote",
+        "distribution": "internal",
         "cache": {
           "disabled": true
         }

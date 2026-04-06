@@ -287,6 +287,17 @@ export default function LocationMockScreen() {
           </View>
         ))}
 
+        {/* Note about auto-injection */}
+        <View style={styles.infoBox}>
+          <MaterialCommunityIcons name="information-outline" size={16} color={Colors.accent} />
+          <Text style={styles.infoText}>
+            <Text style={styles.infoHighlight}>Tip: </Text>
+            If coordinates appear before you inject anything, the Kobiton platform may have automatically applied a default location when the session started. Tap{' '}
+            <Text style={styles.infoHighlight}>Refresh</Text>{' '}
+            after injecting your target coordinates to see them update here.
+          </Text>
+        </View>
+
         {/* How it works */}
         <Text style={styles.sectionTitle}>HOW LOCATION INJECTION WORKS</Text>
 

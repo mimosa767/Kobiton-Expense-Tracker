@@ -89,35 +89,60 @@ let _memBlocks: Float64Array[] = [];
 let _memBlobs: Blob[] = [];
 let _memRunning = false;
 
-function allocateMemory(mb: number) {
+// Async yield helper — lets the JS event loop process touch events between
+// heavy allocation chunks so the UI never freezes.
+function yield_() {
+  return new Promise<void>((resolve) => {
+    if (typeof setImmediate !== 'undefined') setImmediate(resolve);
+    else setTimeout(resolve, 0);
+  });
+}
+
+// Cap native Blob allocation at this value to prevent OOM crashes.
+// Float64Arrays also contribute to memory pressure via the thrash loop.
+const MAX_BLOB_MB = 200;
+
+async function allocateMemory(mb: number): Promise<void> {
   releaseMemory();
 
-  // --- Layer 1: JS heap pressure (thrash loop keeps pages hot) ---
+  // --- Layer 1: JS heap pressure — Float64Array chunks ---
+  // Each chunk is committed synchronously but we yield between chunks so
+  // the UI thread stays responsive.
   const floatsPerMB = 131072; // 8 bytes × 131,072 = 1 MiB
-  const chunkMB = 10;
-  const chunks = Math.ceil(mb / chunkMB);
-  for (let i = 0; i < chunks; i++) {
-    const chunkSize = Math.min(chunkMB, mb - i * chunkMB);
+  const jsChunkMB = 10;
+  const jsChunks = Math.ceil(mb / jsChunkMB);
+  for (let i = 0; i < jsChunks; i++) {
+    if (!_memRunning) return; // bail if stopped mid-allocation
+    const chunkSize = Math.min(jsChunkMB, mb - i * jsChunkMB);
     const block = new Float64Array(chunkSize * floatsPerMB);
     block.fill(Math.random() * Math.PI); // initial write — commits all pages
     _memBlocks.push(block);
+    await yield_(); // release event loop between each 10 MB chunk
   }
 
   // --- Layer 2: Native byte-buffer Blobs (OS RSS visible to Kobiton) ---
-  // Allocate in 5 MB chunks via ArrayBuffer → Blob. The Blob constructor in
-  // React Native (both Hermes and JSC) copies the bytes into a native buffer
-  // (NSData / byte[]), which Kobiton measures in the process memory graph.
-  const blobChunkBytes = 5 * 1024 * 1024; // 5 MiB per blob
-  const blobCount = Math.ceil(mb / 5);
-  const seed = new Uint8Array(blobChunkBytes);
-  // Write a non-zero pattern so the OS must actually commit the pages.
+  // Blob in React Native is backed by NSData (iOS) / byte[] (Android) —
+  // actual native process memory that Kobiton's system memory graph tracks.
+  // We cap at MAX_BLOB_MB and yield between each Blob creation to avoid
+  // blocking the JS thread and causing the "froze / can't press back" issue.
+  const blobMB = Math.min(mb, MAX_BLOB_MB);
+  const blobChunkMB = 5;
+  const blobCount = Math.ceil(blobMB / blobChunkMB);
+  const seedSize = blobChunkMB * 1024 * 1024;
+  const seed = new Uint8Array(seedSize);
+  // Write a non-zero pattern so the OS must commit the physical pages.
   for (let i = 0; i < seed.length; i += 4096) seed[i] = 0xff;
   for (let b = 0; b < blobCount; b++) {
+    if (!_memRunning) return; // bail if stopped mid-allocation
     try {
-      _memBlobs.push(new Blob([seed.buffer]));
+      // Copy seed bytes into a fresh ArrayBuffer for each Blob so the
+      // buffer is not detached / transferred on the first call.
+      const buf = seed.buffer.slice(0);
+      _memBlobs.push(new Blob([buf]));
     } catch (_) {
       break; // device OOM guard — stop rather than crash
     }
+    await yield_(); // release event loop between each 5 MB Blob
   }
 }
 
@@ -161,14 +186,25 @@ export default function SystemMetricsScreen() {
     };
   }, []);
 
-  function startLoad() {
+  // startLoad is async so it can await the chunked memory allocation without
+  // blocking the JS thread. The UI flips to "running" immediately so the user
+  // can see the state change and press Stop at any time — even mid-allocation.
+  async function startLoad() {
     const cfg = LOAD_CONFIG[loadLevel];
-    allocateMemory(cfg.memoryMB);
-    startMemoryThrash();
-    startCPULoad(cfg.concurrency);
-    startRef.current = Date.now();
     setElapsed(0);
-    setRunning(true);
+    setRunning(true);              // flip UI immediately — Stop button appears
+    _memRunning = true;            // let allocateMemory know we haven't stopped
+    startCPULoad(cfg.concurrency); // start CPU load right away (no blocking)
+
+    // Async chunked allocation — yields between chunks so touch events are
+    // processed. The user can tap Stop while memory is still being allocated.
+    await allocateMemory(cfg.memoryMB);
+
+    // Only start thrash and timer if we're still running (user may have
+    // pressed Stop during the allocation window).
+    if (!_memRunning) return;
+    startMemoryThrash();
+    startRef.current = Date.now();
     timerRef.current = setInterval(() => {
       setElapsed(Math.round((Date.now() - startRef.current) / 1000));
     }, 1000);

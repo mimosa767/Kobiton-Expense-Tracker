@@ -18,7 +18,6 @@ import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import type { CameraViewRef } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import jsQR from 'jsqr';
 import * as jpeg from 'jpeg-js';
@@ -42,7 +41,10 @@ export default function MediaGalleryScreen() {
   const [copyConfirmed, setCopyConfirmed] = useState(false);
   const [cameraVisible, setCameraVisible] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
-  const cameraRef = useRef<CameraViewRef | null>(null);
+  // CameraView's public imperative API lives on CameraView (the class), not on
+  // the inner CameraViewRef (which is the internal native ref). The public
+  // method to call is takePictureAsync — same as in camera.tsx.
+  const cameraRef = useRef<CameraView | null>(null);
 
   useEffect(() => {
     if (tab === 'qr' && Platform.OS !== 'web') {
@@ -163,7 +165,9 @@ export default function MediaGalleryScreen() {
     if (!cameraRef.current || isCapturing) return;
     setIsCapturing(true);
     try {
-      const pic = await cameraRef.current.takePicture({ base64: true, quality: 0.9 });
+      // takePictureAsync is the public method on CameraView. takePicture is
+      // the internal native ref method and is not callable directly from here.
+      const pic = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.9 });
       if (!pic.base64) throw new Error('No base64 data from camera');
       const qrData = await decodeQRFromBase64(pic.base64);
       if (qrData) {
