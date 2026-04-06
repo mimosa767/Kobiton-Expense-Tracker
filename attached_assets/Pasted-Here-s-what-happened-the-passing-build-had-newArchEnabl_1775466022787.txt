@@ -1,0 +1,19 @@
+Here's what happened — the passing build had newArchEnabled: true
+The passing build (cf807c8a — ARCHIVE SUCCEEDED) compiled RNCSliderComponentView.mm with -DRCT_NEW_ARCH_ENABLED=1 and it succeeded. The current failing builds compile with New Arch enabled too, but are failing on the same file. Let me explain the exact difference:
+The passing build succeeded because it had New Arch enabled AND was built at a point in time when EAS's cached Pods directory had a working ReactCodegen output — specifically the generated RNCSliderComponentDescriptor.h file existed in ios/build/generated/ios/react/renderer/components/RNCSlider/. You can see it generating those files at lines 16790-17070 of the passing log (States.cpp, ShadowNodes.cpp, Props.cpp, EventEmitters.cpp, ComponentDescriptors.cpp all compiled successfully). Then RNCSliderComponentView.mm compiled cleanly because the descriptor header it imports was already generated.
+The failing builds fail because [Codegen] Processing RNCSlider runs and generates those same files, but there's a timing/ordering issue where RNCSliderComponentView.mm tries to compile before the generated RNCSliderComponentDescriptor.h is in the right location — specifically, it looks for it at react/renderer/components/RNCSlider/RNCSliderComponentDescriptor.h relative to the header search paths but the generated file path doesn't line up.
+Why can't we replicate the passing build's conditions? Two reasons:
+
+The passing build was newArchEnabled: true, which the current build also is — so that's not the differentiator on its own.
+The real differentiator was the EAS Pods cache state. The passing build hit an EAS Pods cache that had been built with newArchEnabled: true in a prior clean build. The generated ReactCodegen output was in a consistent state where the descriptor header and the slider's ComponentView.mm were compiled in the correct order with the header already present.
+
+Why this is not reproducible by simply flipping switches: Every failing build since then is pulling from the EAS Pods cache that was seeded from a newArchEnabled: false build. When it runs Codegen, slider's .mm file tries to import the generated header, but because EAS is mixing a Pods cache from an Old Arch build with a New Arch Codegen run, the header either isn't there at compile time or is in the wrong path.
+
+The one fix that would actually work
+Run with --clear-cache AND confirm newArchEnabled: true is in app.json. This busts EAS's stale Old Arch Pods cache and forces a fresh Codegen run where the slider's descriptor header gets generated before the .mm tries to import it — exactly the conditions that made the passing build work.
+Tell Replit to confirm:
+
+"newArchEnabled": true is currently set in app.json
+Then run: eas build --platform ios --profile preview --clear-cache
+
+That's the only way to get back to the state the passing build was in.
