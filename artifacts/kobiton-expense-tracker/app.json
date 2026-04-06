@@ -66,6 +66,11 @@
       "typedRoutes": true,
       "reactCompiler": true
     },
+    "extra": {
+      "eas": {
+        "projectId": "ae41562e-4af7-49a4-8286-3465d0bc96ad"
+      }
+    },
     "autolinking": {
       "exclude": ["@react-native-community/slider"]
     }
