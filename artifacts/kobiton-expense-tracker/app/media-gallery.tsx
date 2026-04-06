@@ -18,6 +18,7 @@ import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { captureRef } from 'react-native-view-shot';
 import * as ImagePicker from 'expo-image-picker';
 import jsQR from 'jsqr';
 import * as jpeg from 'jpeg-js';
@@ -41,10 +42,13 @@ export default function MediaGalleryScreen() {
   const [copyConfirmed, setCopyConfirmed] = useState(false);
   const [cameraVisible, setCameraVisible] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
-  // CameraView's public imperative API lives on CameraView (the class), not on
-  // the inner CameraViewRef (which is the internal native ref). The public
-  // method to call is takePictureAsync — same as in camera.tsx.
   const cameraRef = useRef<CameraView | null>(null);
+  // iOS capture ref: points at the View wrapping CameraView so we can
+  // screenshot its rendered pixels with react-native-view-shot.
+  // Kobiton swizzles AVCaptureVideoDataOutput (the live-preview path), NOT
+  // AVCapturePhotoOutput (takePictureAsync path). The only reliable way to
+  // grab the injected frame in JS is to capture what is visually rendered.
+  const cameraContainerRef = useRef<View | null>(null);
 
   useEffect(() => {
     if (tab === 'qr' && Platform.OS !== 'web') {
@@ -54,7 +58,10 @@ export default function MediaGalleryScreen() {
 
   useEffect(() => {
     if (permission?.granted) {
-      const t = setTimeout(() => setCameraVisible(true), 350);
+      // 750 ms warm-up before mounting CameraView.
+      // A shorter delay (350 ms) caused intermittent crashes on the first open
+      // — the AVCaptureSession wasn't fully initialised before the view mounted.
+      const t = setTimeout(() => setCameraVisible(true), 750);
       return () => clearTimeout(t);
     } else {
       setCameraVisible(false);
@@ -165,23 +172,37 @@ export default function MediaGalleryScreen() {
     }
   }
 
-  // ── iOS: takePicture from CameraView (AVCaptureVideoDataOutput) ───────────────
-  // Kobiton's KobitonSdk.framework swizzles AVCaptureVideoDataOutput at the OS
-  // level so takePicture() captures the injected frame directly.
+  // ── iOS: screenshot CameraView via react-native-view-shot ────────────────────
+  // WHY NOT takePictureAsync:
+  //   expo-camera's takePictureAsync uses AVCapturePhotoOutput on iOS.
+  //   Kobiton's SDK swizzles AVCaptureVideoDataOutput (the live-preview path),
+  //   NOT AVCapturePhotoOutput. So takePictureAsync captures the REAL camera
+  //   scene — not the injected frame — and jsQR finds nothing.
+  //
+  // WHY captureRef WORKS:
+  //   react-native-view-shot calls UIView.drawViewHierarchyInRect which, on
+  //   iOS 14+, renders camera preview layers (AVSampleBufferDisplayLayer) into
+  //   the snapshot. Because the preview layer IS fed by the swizzled
+  //   AVCaptureVideoDataOutput buffer, the snapshot contains the injected frame.
   async function captureAndDecodeIOS() {
-    if (!cameraRef.current || isCapturing) return;
+    if (!cameraContainerRef.current || isCapturing) return;
     setIsCapturing(true);
     try {
-      // takePictureAsync is the public method on CameraView. takePicture is
-      // the internal native ref method and is not callable directly from here.
-      const pic = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.9 });
-      if (!pic.base64) throw new Error('No base64 data from camera');
-      const qrData = await decodeQRFromBase64(pic.base64);
+      const b64 = await captureRef(cameraContainerRef, {
+        format: 'jpg',
+        quality: 0.92,
+        result: 'base64', // pure base64, no data-uri prefix
+      });
+      if (!b64) throw new Error('captureRef returned empty data');
+      const qrData = await decodeQRFromBase64(b64);
       if (qrData) {
         setScannedResult({ type: 'qr', data: qrData });
         setScanning(false);
       } else {
-        Alert.alert('No QR Code Found', 'Could not decode a QR code from the captured frame. Make sure the injected image is a valid QR code and try again.');
+        Alert.alert(
+          'No QR Code Found',
+          'Could not decode a QR code from the captured frame. Make sure the Kobiton-injected image is active in the camera stream and try again.',
+        );
       }
     } catch (e) {
       Alert.alert('Capture Error', String(e));
@@ -345,18 +366,24 @@ export default function MediaGalleryScreen() {
         {scanning ? (
           <View style={{ flex: 1, position: 'relative' }}>
             {cameraVisible ? (
-              <CameraView
-                ref={cameraRef as any}
-                style={{ flex: 1 }}
-                facing="back"
-                // On iOS, Kobiton SDK swizzles AVCaptureVideoDataOutput. Enabling
-                // onBarcodeScanned also activates AVCaptureMetadataOutput, and the
-                // two outputs conflict on the Kobiton-instrumented session, causing
-                // a native crash when the CameraView mounts. Disable native barcode
-                // detection on iOS — the "Capture & Decode" button handles decoding.
-                onBarcodeScanned={Platform.OS === 'android' ? handleBarcodeScanned : undefined}
-                barcodeScannerSettings={Platform.OS === 'android' ? { barcodeTypes: ['qr'] } : undefined}
-              />
+              // cameraContainerRef lets captureRef (react-native-view-shot) snapshot
+              // the rendered pixels of the CameraView on iOS, capturing the
+              // Kobiton-injected frame (which drives the preview via the swizzled
+              // AVCaptureVideoDataOutput, not AVCapturePhotoOutput).
+              <View ref={cameraContainerRef as any} style={{ flex: 1 }}>
+                <CameraView
+                  ref={cameraRef as any}
+                  style={{ flex: 1 }}
+                  facing="back"
+                  // On iOS, Kobiton SDK swizzles AVCaptureVideoDataOutput. Enabling
+                  // onBarcodeScanned also activates AVCaptureMetadataOutput, and the
+                  // two outputs conflict on the Kobiton-instrumented session, causing
+                  // a native crash when the CameraView mounts. Disable native barcode
+                  // detection on iOS — the "Capture & Decode" button handles decoding.
+                  onBarcodeScanned={Platform.OS === 'android' ? handleBarcodeScanned : undefined}
+                  barcodeScannerSettings={Platform.OS === 'android' ? { barcodeTypes: ['qr'] } : undefined}
+                />
+              </View>
             ) : (
               <View style={[{ flex: 1 }, styles.cameraPlaceholder]}>
                 <ActivityIndicator size="large" color={Colors.primary} />
