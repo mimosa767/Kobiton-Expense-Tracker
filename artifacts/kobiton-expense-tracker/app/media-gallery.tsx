@@ -16,7 +16,10 @@ import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import type { CameraViewRef } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
+import jsQR from 'jsqr';
+import * as jpeg from 'jpeg-js';
 import { useExpenses } from '@/src/context/ExpenseContext';
 import { Colors, Radius, Shadow, Spacing, Typography } from '@/src/constants/theme';
 
@@ -35,12 +38,46 @@ export default function MediaGalleryScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const lastScan = useRef(0);
   const [copyConfirmed, setCopyConfirmed] = useState(false);
+  const [cameraVisible, setCameraVisible] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const cameraRef = useRef<CameraViewRef | null>(null);
 
   useEffect(() => {
     if (tab === 'qr' && Platform.OS !== 'web') {
       requestPermission();
     }
   }, [tab]);
+
+  useEffect(() => {
+    if (permission?.granted) {
+      const t = setTimeout(() => setCameraVisible(true), 350);
+      return () => clearTimeout(t);
+    } else {
+      setCameraVisible(false);
+    }
+  }, [permission?.granted]);
+
+  async function captureAndDecode() {
+    if (!cameraRef.current || isCapturing) return;
+    setIsCapturing(true);
+    try {
+      const pic = await cameraRef.current.takePicture({ base64: true, quality: 0.9 });
+      if (!pic.base64) throw new Error('No base64 data from camera');
+      const raw = Buffer.from(pic.base64, 'base64');
+      const { data, width, height } = jpeg.decode(raw, { useTArray: true });
+      const code = jsQR(new Uint8ClampedArray(data), width, height);
+      if (code) {
+        setScannedResult({ type: 'qr', data: code.data });
+        setScanning(false);
+      } else {
+        Alert.alert('No QR Code Found', 'Could not decode a QR code from the captured frame. Make sure the injected image is a valid QR code and try again.');
+      }
+    } catch (e) {
+      Alert.alert('Capture Error', String(e));
+    } finally {
+      setIsCapturing(false);
+    }
+  }
 
   const receiptImages = expenses
     .filter((e) => e.attachmentUri)
@@ -188,24 +225,48 @@ export default function MediaGalleryScreen() {
       <View style={{ flex: 1 }}>
         {scanning ? (
           <View style={{ flex: 1, position: 'relative' }}>
-            <CameraView
-              style={{ flex: 1 }}
-              facing="back"
-              onBarcodeScanned={handleBarcodeScanned}
-              barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'code128', 'pdf417'] }}
-            />
-            <View style={styles.scanOverlay} pointerEvents="none">
-              <View style={styles.scanFrame}>
+            {cameraVisible ? (
+              <CameraView
+                ref={cameraRef as any}
+                style={{ flex: 1 }}
+                facing="back"
+                onBarcodeScanned={handleBarcodeScanned}
+                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+              />
+            ) : (
+              <View style={[{ flex: 1 }, styles.cameraPlaceholder]}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+              </View>
+            )}
+            <View style={styles.scanOverlay} pointerEvents="box-none">
+              <View style={styles.scanFrame} pointerEvents="none">
                 <View style={[styles.corner, styles.cornerTL]} />
                 <View style={[styles.corner, styles.cornerTR]} />
                 <View style={[styles.corner, styles.cornerBL]} />
                 <View style={[styles.corner, styles.cornerBR]} />
               </View>
-              <Text style={styles.scanHint}>Point camera at a QR or barcode</Text>
-              <View style={styles.scanBadge}>
+              <Text style={styles.scanHint} pointerEvents="none">
+                Point at a QR code — or use Capture
+              </Text>
+              <View style={styles.scanBadge} pointerEvents="none">
                 <Feather name="zap" size={11} color={Colors.primary} />
                 <Text style={styles.scanBadgeText}>Kobiton image injection ready</Text>
               </View>
+              <TouchableOpacity
+                style={[styles.captureBtn, isCapturing && styles.captureBtnBusy]}
+                onPress={captureAndDecode}
+                disabled={isCapturing || !cameraVisible}
+                testID="capture-decode-btn"
+              >
+                {isCapturing ? (
+                  <ActivityIndicator size="small" color={Colors.white} />
+                ) : (
+                  <Feather name="camera" size={18} color={Colors.white} />
+                )}
+                <Text style={styles.captureBtnText}>
+                  {isCapturing ? 'Decoding…' : 'Capture & Decode'}
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
         ) : (
@@ -575,6 +636,11 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     paddingHorizontal: 8,
   },
+  cameraPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.textPrimary,
+  },
   scanBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -588,6 +654,26 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontFamily: Typography.fontMedium,
     color: Colors.primary,
+  },
+  captureBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.full,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    minWidth: 180,
+    ...Shadow.button,
+  },
+  captureBtnBusy: {
+    backgroundColor: Colors.primary + 'AA',
+  },
+  captureBtnText: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.white,
   },
   resultActions: {
     flexDirection: 'row',
