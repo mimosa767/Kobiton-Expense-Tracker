@@ -349,8 +349,13 @@ export default function MediaGalleryScreen() {
                 ref={cameraRef as any}
                 style={{ flex: 1 }}
                 facing="back"
-                onBarcodeScanned={handleBarcodeScanned}
-                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                // On iOS, Kobiton SDK swizzles AVCaptureVideoDataOutput. Enabling
+                // onBarcodeScanned also activates AVCaptureMetadataOutput, and the
+                // two outputs conflict on the Kobiton-instrumented session, causing
+                // a native crash when the CameraView mounts. Disable native barcode
+                // detection on iOS — the "Capture & Decode" button handles decoding.
+                onBarcodeScanned={Platform.OS === 'android' ? handleBarcodeScanned : undefined}
+                barcodeScannerSettings={Platform.OS === 'android' ? { barcodeTypes: ['qr'] } : undefined}
               />
             ) : (
               <View style={[{ flex: 1 }, styles.cameraPlaceholder]}>
@@ -365,7 +370,9 @@ export default function MediaGalleryScreen() {
                 <View style={[styles.corner, styles.cornerBR]} />
               </View>
               <Text style={styles.scanHint} pointerEvents="none">
-                Point at a QR code — or use Capture
+                {Platform.OS === 'android'
+                  ? 'Point at a QR code — or use Capture'
+                  : 'Use Capture & Decode to read the injected QR code'}
               </Text>
               <View style={styles.scanBadge} pointerEvents="none">
                 <Feather name="zap" size={11} color={Colors.primary} />
