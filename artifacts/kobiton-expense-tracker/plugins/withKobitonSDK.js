@@ -607,6 +607,25 @@ function withKobitonIosImageInjection(config, options) {
         console.warn('[KobitonSDK] ⚠ KobitonSdk.framework not found in sdk-files/ios/. Place the framework there before running expo prebuild, or copy it manually to ios/KobitonFrameworks/KobitonSdk.framework.');
       }
 
+      // Write podspec for CocoaPods embedding (same reason as KobitonLAContext above)
+      const sdkPodspecPath = path.join(frameworksDir, 'KobitonSdk.podspec');
+      const sdkPodspec = [
+        "Pod::Spec.new do |s|",
+        "  s.name               = 'KobitonSdk'",
+        "  s.version            = '1.0.0'",
+        "  s.summary            = 'Kobiton image injection SDK'",
+        "  s.description        = 'Kobiton camera image injection framework for iOS'",
+        "  s.homepage           = 'https://kobiton.com'",
+        "  s.license            = { :type => 'Commercial' }",
+        "  s.author             = { 'Kobiton' => 'support@kobiton.com' }",
+        "  s.platform           = :ios, '12.0'",
+        "  s.source             = { :git => '' }",
+        "  s.vendored_frameworks = 'KobitonSdk.framework'",
+        "end",
+      ].join("\n");
+      fs.writeFileSync(sdkPodspecPath, sdkPodspec, 'utf8');
+      console.log('[KobitonSDK] ✓ Wrote KobitonSdk.podspec (vendored_frameworks for CocoaPods embedding)');
+
       // Write setup README
       const readmeContent = [
         'Kobiton Image Injection SDK for iOS',
@@ -867,6 +886,28 @@ function withKobitonIosBiometric(config, options) {
       } else {
         console.warn('[KobitonSDK] ⚠ KobitonLAContext.framework not found in sdk-files/ios/. Place it there before running expo prebuild, or copy it manually to ios/KobitonFrameworks/KobitonLAContext.framework.');
       }
+
+      // Write a minimal podspec so CocoaPods can embed + sign this pre-built
+      // framework automatically. Without it, FRAMEWORK_SEARCH_PATHS only satisfies
+      // the build-time linker; the binary is never copied into the .ipa Frameworks/
+      // folder, causing a "Library not loaded" crash at launch.
+      const lacPodspecPath = path.join(frameworksDir, 'KobitonLAContext.podspec');
+      const lacPodspec = [
+        "Pod::Spec.new do |s|",
+        "  s.name               = 'KobitonLAContext'",
+        "  s.version            = '1.0.0'",
+        "  s.summary            = 'Kobiton biometric interception framework'",
+        "  s.description        = 'Drop-in LAContext replacement enabling Kobiton biometric injection'",
+        "  s.homepage           = 'https://kobiton.com'",
+        "  s.license            = { :type => 'Commercial' }",
+        "  s.author             = { 'Kobiton' => 'support@kobiton.com' }",
+        "  s.platform           = :ios, '12.0'",
+        "  s.source             = { :git => '' }",
+        "  s.vendored_frameworks = 'KobitonLAContext.framework'",
+        "end",
+      ].join("\n");
+      fs.writeFileSync(lacPodspecPath, lacPodspec, 'utf8');
+      console.log('[KobitonSDK] ✓ Wrote KobitonLAContext.podspec (vendored_frameworks for CocoaPods embedding)');
 
       const readmeContent = [
         'Kobiton Biometric Authentication SDK for iOS (KobitonLAContext)',
@@ -2258,6 +2299,62 @@ RCT_EXPORT_METHOD(authenticate:(NSString *)reason
     return config;
   }
 
+// ─── iOS: Add Kobiton frameworks as CocoaPods pods in the Podfile ────────────
+//
+// WHY PODFILE INJECTION INSTEAD OF addFramework(embed:true)
+// ---------------------------------------------------------
+// xcodeProject.addFramework() with embed:true is supposed to add the framework
+// to the "Embed Frameworks" (PBXCopyFilesBuildPhase) step. In practice it
+// silently fails on EAS-generated Expo projects: the framework is linked at
+// build time (FRAMEWORK_SEARCH_PATHS) but the binary is NEVER copied into the
+// .ipa's Frameworks/ directory, so dyld crashes at launch with "Library not
+// loaded: @rpath/KobitonLAContext.framework/KobitonLAContext".
+//
+// The proven fix: register each framework as a CocoaPods pod with a minimal
+// podspec that sets vendored_frameworks. CocoaPods then handles embed + sign
+// automatically via the "[CP] Embed Pods Frameworks" build phase that is
+// already present in every Expo project.
+//
+// This function:
+//   1. Injects `pod 'KobitonLAContext', :path => 'KobitonFrameworks'` into the
+//      Podfile (and KobitonSdk if imageInjectionSupport is enabled), guarded by
+//      an idempotency check so repeated prebuilds are safe.
+//   2. Does NOT touch the Xcode project — CocoaPods owns the embed phase.
+
+function withKobitonIosPodfileFrameworks(config, options) {
+  return withDangerousMod(config, [
+    'ios',
+    async (mod) => {
+      const projectRoot = mod.modRequest.projectRoot;
+      const podfilePath = path.join(projectRoot, 'ios', 'Podfile');
+      let podfile = fs.readFileSync(podfilePath, 'utf8');
+
+      const linesToAdd = [];
+      if (options.biometricSupport && !podfile.includes("pod 'KobitonLAContext'")) {
+        linesToAdd.push("  pod 'KobitonLAContext', :path => 'KobitonFrameworks'");
+      }
+      if (options.imageInjectionSupport && !podfile.includes("pod 'KobitonSdk'")) {
+        linesToAdd.push("  pod 'KobitonSdk', :path => 'KobitonFrameworks'");
+      }
+
+      if (linesToAdd.length > 0) {
+        // Insert immediately after `use_expo_modules!` (which is inside the
+        // target block) so the pods are scoped to the app target.
+        podfile = podfile.replace(
+          /([ \t]*use_expo_modules!\s*\n)/,
+          `$1\n${linesToAdd.join('\n')}\n`
+        );
+        fs.writeFileSync(podfilePath, podfile, 'utf8');
+        console.log('[KobitonSDK] ✓ Injected Kobiton framework pod references into Podfile:', linesToAdd);
+      } else {
+        console.log('[KobitonSDK] ✓ Kobiton framework pod references already present in Podfile — skipping');
+      }
+
+      return mod;
+    },
+  ]);
+}
+
 // ─── iOS: Embed Frameworks in Xcode project ───────────────────────────────────
 //
 // WHY THIS IS NEEDED
@@ -2366,12 +2463,13 @@ const withKobitonSDK = (config, options = {}) => {
     return mod;
   });
 
-  // iOS: embed KobitonLAContext.framework / KobitonSdk.framework so they land
-  // inside the .ipa and can be loaded at runtime. Without this, the dynamic
-  // linker can't find them even though FRAMEWORK_SEARCH_PATHS is set for the
-  // build-time link step.
+  // iOS: inject pod references for KobitonLAContext / KobitonSdk so CocoaPods
+  // embeds them into the .ipa via "[CP] Embed Pods Frameworks". This replaces
+  // the previous xcodeProject.addFramework(embed:true) approach which silently
+  // failed to copy the binaries into the app bundle (diagnosed via device logs:
+  // "Library not loaded: @rpath/KobitonLAContext.framework/KobitonLAContext").
   if (options.biometricSupport || options.imageInjectionSupport) {
-    config = withKobitonIosEmbedFrameworks(config, options);
+    config = withKobitonIosPodfileFrameworks(config, options);
   }
 
   return config;
