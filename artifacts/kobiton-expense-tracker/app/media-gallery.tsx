@@ -1,6 +1,8 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
+  Clipboard,
   Dimensions,
   Image,
   Platform,
@@ -32,6 +34,13 @@ export default function MediaGalleryScreen() {
   const [pickedImages, setPickedImages] = useState<string[]>([]);
   const [permission, requestPermission] = useCameraPermissions();
   const lastScan = useRef(0);
+  const [copyConfirmed, setCopyConfirmed] = useState(false);
+
+  useEffect(() => {
+    if (tab === 'qr' && Platform.OS !== 'web') {
+      requestPermission();
+    }
+  }, [tab]);
 
   const receiptImages = expenses
     .filter((e) => e.attachmentUri)
@@ -144,18 +153,35 @@ export default function MediaGalleryScreen() {
       );
     }
 
-    if (!permission) return null;
+    if (permission === null) {
+      return (
+        <View style={styles.permBox}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+          <Text style={styles.permTitle}>Requesting camera access…</Text>
+        </View>
+      );
+    }
 
     if (!permission.granted) {
       return (
         <View style={styles.permBox}>
           <Feather name="camera-off" size={36} color={Colors.textMuted} />
           <Text style={styles.permTitle}>Camera permission needed</Text>
-          <TouchableOpacity style={styles.permBtn} onPress={requestPermission}>
+          <Text style={styles.permSubtitle}>
+            Allow camera access so the QR scanner can read codes — including ones injected by Kobiton.
+          </Text>
+          <TouchableOpacity style={styles.permBtn} onPress={requestPermission} testID="grant-camera-btn">
             <Text style={styles.permBtnText}>Grant Camera Access</Text>
           </TouchableOpacity>
         </View>
       );
+    }
+
+    function handleCopy() {
+      if (!scannedResult?.data) return;
+      Clipboard.setString(scannedResult.data);
+      setCopyConfirmed(true);
+      setTimeout(() => setCopyConfirmed(false), 2000);
     }
 
     return (
@@ -168,7 +194,6 @@ export default function MediaGalleryScreen() {
               onBarcodeScanned={handleBarcodeScanned}
               barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'code128', 'pdf417'] }}
             />
-            {/* Viewfinder overlay */}
             <View style={styles.scanOverlay} pointerEvents="none">
               <View style={styles.scanFrame}>
                 <View style={[styles.corner, styles.cornerTL]} />
@@ -177,6 +202,10 @@ export default function MediaGalleryScreen() {
                 <View style={[styles.corner, styles.cornerBR]} />
               </View>
               <Text style={styles.scanHint}>Point camera at a QR or barcode</Text>
+              <View style={styles.scanBadge}>
+                <Feather name="zap" size={11} color={Colors.primary} />
+                <Text style={styles.scanBadgeText}>Kobiton image injection ready</Text>
+              </View>
             </View>
           </View>
         ) : (
@@ -196,10 +225,20 @@ export default function MediaGalleryScreen() {
               <View style={styles.resultDataBox}>
                 <Text style={styles.resultData} selectable>{scannedResult?.data ?? ''}</Text>
               </View>
-              <TouchableOpacity style={styles.rescanBtn} onPress={handleRescan} testID="rescan-btn">
-                <Feather name="refresh-cw" size={16} color={Colors.white} />
-                <Text style={styles.rescanBtnText}>Scan Again</Text>
-              </TouchableOpacity>
+              <View style={styles.resultActions}>
+                <TouchableOpacity
+                  style={[styles.copyBtn, copyConfirmed && styles.copyBtnConfirmed]}
+                  onPress={handleCopy}
+                  testID="copy-result-btn"
+                >
+                  <Feather name={copyConfirmed ? 'check' : 'copy'} size={15} color={Colors.white} />
+                  <Text style={styles.copyBtnText}>{copyConfirmed ? 'Copied!' : 'Copy'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.rescanBtn} onPress={handleRescan} testID="rescan-btn">
+                  <Feather name="refresh-cw" size={15} color={Colors.white} />
+                  <Text style={styles.rescanBtnText}>Scan Again</Text>
+                </TouchableOpacity>
+              </View>
             </View>
             <View style={styles.infoCard}>
               <View style={styles.infoCardHeader}>
@@ -207,7 +246,9 @@ export default function MediaGalleryScreen() {
                 <Text style={styles.infoCardTitle}>Image Injection Demo</Text>
               </View>
               <Text style={styles.infoCardText}>
-                This scan was triggered by a real or injected camera image. On Kobiton, you can inject a QR code image into the camera stream to automate scanning flows in your test scripts.
+                This scan was triggered by a real or Kobiton-injected camera image.{'\n\n'}
+                On iOS, <Text style={{ fontFamily: Typography.fontSemiBold }}>KobitonSdk.framework</Text> swizzles AVCaptureSession so injected frames flow directly to the barcode decoder.{'\n\n'}
+                On Android, <Text style={{ fontFamily: Typography.fontSemiBold }}>kobiton.hardware.camera2</Text> replaces the system camera2 API so CameraX receives the injected feed.
               </Text>
             </View>
           </ScrollView>
@@ -526,17 +567,61 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     lineHeight: 18,
   },
-  rescanBtn: {
+  permSubtitle: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontRegular,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 19,
+    paddingHorizontal: 8,
+  },
+  scanBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderRadius: Radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  scanBadgeText: {
+    fontSize: 11,
+    fontFamily: Typography.fontMedium,
+    color: Colors.primary,
+  },
+  resultActions: {
+    flexDirection: 'row',
+    gap: 10,
+    width: '100%',
+    marginTop: 4,
+  },
+  copyBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: Colors.textSecondary,
+    borderRadius: Radius.md,
+    paddingVertical: 12,
+  },
+  copyBtnConfirmed: {
+    backgroundColor: Colors.success,
+  },
+  copyBtnText: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.white,
+  },
+  rescanBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
     backgroundColor: Colors.primary,
     borderRadius: Radius.md,
     paddingVertical: 12,
-    paddingHorizontal: 24,
-    marginTop: 4,
-    alignSelf: 'stretch',
-    justifyContent: 'center',
   },
   rescanBtnText: {
     fontSize: Typography.sizeSm,
