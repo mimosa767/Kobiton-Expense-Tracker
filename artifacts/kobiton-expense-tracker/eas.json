@@ -38,7 +38,7 @@
         "disabled": true
       },
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "apk"
       },
       "ios": {
         "credentialsSource": "remote",
