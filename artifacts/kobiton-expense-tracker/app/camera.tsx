@@ -122,12 +122,23 @@ function IosCameraScreen() {
   const [facing, setFacing] = useState<'back' | 'front'>('back');
   const [permission, requestPermission] = useCameraPermissions();
 
-  // Auto-request permission on mount so the OS prompt fires immediately
-  // and the Kobiton platform can intercept it.
+  // Request permission immediately on mount regardless of current status.
+  //
+  // WHY: useCameraPermissions() returns null on the very first render while
+  // iOS checks the TCC database asynchronously. The previous guard
+  // `if (permission && !permission.granted)` evaluated to false when
+  // permission was null, so requestPermission() was never called — leaving
+  // AVCaptureSession starting without authorization. KobitonSdk.framework
+  // swizzles AVCaptureSession at the OS level; when the session starts before
+  // the user has granted access the SDK crashes on first attempt (works on
+  // retry because permission is already stored by then).
+  //
+  // By calling requestPermission() unconditionally here we ensure:
+  //   1. The OS permission dialog fires before CameraView mounts.
+  //   2. CameraView is only rendered (see JSX below) after permission.granted
+  //      is true, so AVCaptureSession never starts in an unauthorized state.
   useEffect(() => {
-    if (permission && !permission.granted) {
-      requestPermission();
-    }
+    requestPermission();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCapture = useCallback(async () => {
@@ -161,6 +172,49 @@ function IosCameraScreen() {
     setFacing(f => f === 'back' ? 'front' : 'back');
   }, []);
 
+  // ── Permission gate ─────────────────────────────────────────────────────────
+  // Do NOT render CameraView (and therefore do not start AVCaptureSession)
+  // until we have confirmed camera authorization. Rendering CameraView without
+  // authorization is what caused the first-attempt crash.
+
+  // Still waiting for iOS to resolve the TCC check
+  if (!permission) {
+    return (
+      <View style={styles.permissionContainer}>
+        <ActivityIndicator color={Colors.white} size="large" />
+        <Text style={styles.permissionText}>Checking camera access…</Text>
+      </View>
+    );
+  }
+
+  // Permission explicitly denied or restricted — show actionable UI
+  if (!permission.granted) {
+    return (
+      <View style={styles.permissionContainer}>
+        <Feather name="camera-off" size={44} color={Colors.white} />
+        <Text style={styles.permissionText}>
+          Camera access is required to capture receipt photos.
+        </Text>
+        {permission.canAskAgain ? (
+          <TouchableOpacity style={styles.permissionBtn} onPress={requestPermission}>
+            <Text style={styles.permissionBtnText}>Allow Camera Access</Text>
+          </TouchableOpacity>
+        ) : (
+          <Text style={[styles.permissionText, { fontSize: 13, opacity: 0.7 }]}>
+            Open Settings → Privacy → Camera → enable for this app.
+          </Text>
+        )}
+        <TouchableOpacity
+          style={[styles.permissionBtn, styles.cancelBtn]}
+          onPress={handleCancel}
+        >
+          <Text style={styles.permissionBtnText}>Cancel</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // ── Camera is authorized — render CameraView ────────────────────────────────
   return (
     <View style={styles.container}>
       <CameraView
