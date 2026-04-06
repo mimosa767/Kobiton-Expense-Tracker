@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
+  Modal,
   PanResponder,
   Platform,
   ScrollView,
@@ -181,35 +182,190 @@ function WebDatePicker({ value, onChange }: { value: Date; onChange: (d: Date) =
   );
 }
 
+// ─── Pure-JS Date Picker (no native deps) ────────────────────────────────────
+// Replaces @react-native-community/datetimepicker which was transitively pulling
+// in @react-native-community/slider via react-native-windows, causing iOS build
+// failures when the Fabric descriptor header was absent from Codegen output.
+
+const PICKER_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const PICKER_CURRENT_YEAR = new Date().getFullYear();
+const PICKER_YEARS = Array.from({ length: 11 }, (_, i) => String(PICKER_CURRENT_YEAR - 5 + i));
+const PICKER_ITEM_H = 44;
+
+function DatePickerColumn({
+  items,
+  selectedIndex,
+  onSelect,
+}: {
+  items: string[];
+  selectedIndex: number;
+  onSelect: (i: number) => void;
+}) {
+  const ref = useRef<ScrollView>(null);
+  const settled = useRef(selectedIndex);
+
+  useEffect(() => {
+    ref.current?.scrollTo({ y: selectedIndex * PICKER_ITEM_H, animated: false });
+    settled.current = selectedIndex;
+  }, [selectedIndex]);
+
+  return (
+    <View style={{ flex: 1, overflow: 'hidden' }}>
+      {/* selection highlight bar */}
+      <View pointerEvents="none" style={{
+        position: 'absolute', top: PICKER_ITEM_H * 2,
+        left: 4, right: 4, height: PICKER_ITEM_H,
+        backgroundColor: Colors.primary + '18',
+        borderRadius: 8, zIndex: 1,
+      }} />
+      <ScrollView
+        ref={ref}
+        showsVerticalScrollIndicator={false}
+        snapToInterval={PICKER_ITEM_H}
+        decelerationRate="fast"
+        style={{ maxHeight: PICKER_ITEM_H * 5 }}
+        onMomentumScrollEnd={(e) => {
+          const idx = Math.round(e.nativeEvent.contentOffset.y / PICKER_ITEM_H);
+          const clamped = Math.max(0, Math.min(items.length - 1, idx));
+          settled.current = clamped;
+          onSelect(clamped);
+        }}
+      >
+        <View style={{ height: PICKER_ITEM_H * 2 }} />
+        {items.map((item, i) => (
+          <TouchableOpacity
+            key={i}
+            style={{ height: PICKER_ITEM_H, alignItems: 'center', justifyContent: 'center' }}
+            onPress={() => {
+              onSelect(i);
+              ref.current?.scrollTo({ y: i * PICKER_ITEM_H, animated: true });
+            }}
+          >
+            <Text style={{
+              fontSize: 16,
+              color: i === selectedIndex ? Colors.primary : Colors.textPrimary,
+              fontFamily: i === selectedIndex ? Typography.fontSemiBold : Typography.fontRegular,
+            }}>
+              {item}
+            </Text>
+          </TouchableOpacity>
+        ))}
+        <View style={{ height: PICKER_ITEM_H * 2 }} />
+      </ScrollView>
+    </View>
+  );
+}
+
 function NativeDatePicker({ value, onChange }: { value: Date; onChange: (d: Date) => void }) {
-  const [show, setShow] = useState(false);
-  const DateTimePicker = require('@react-native-community/datetimepicker').default;
+  const [open, setOpen] = useState(false);
+  const [selMonth, setSelMonth] = useState(value.getMonth());
+  const [selDay, setSelDay] = useState(value.getDate() - 1);
+  const [selYear, setSelYear] = useState(() => {
+    const idx = PICKER_YEARS.indexOf(String(value.getFullYear()));
+    return idx >= 0 ? idx : 5;
+  });
+
+  const pickerYear = parseInt(PICKER_YEARS[selYear]);
+  const daysInMonth = new Date(pickerYear, selMonth + 1, 0).getDate();
+  const dayItems = Array.from({ length: daysInMonth }, (_, i) => String(i + 1).padStart(2, '0'));
+
+  useEffect(() => {
+    if (selDay >= daysInMonth) setSelDay(daysInMonth - 1);
+  }, [selMonth, selYear, daysInMonth]);
+
+  const openPicker = () => {
+    const yearIdx = PICKER_YEARS.indexOf(String(value.getFullYear()));
+    setSelMonth(value.getMonth());
+    setSelDay(value.getDate() - 1);
+    setSelYear(yearIdx >= 0 ? yearIdx : 5);
+    setOpen(true);
+  };
+
+  const confirm = () => {
+    const y = parseInt(PICKER_YEARS[selYear]);
+    const maxDay = new Date(y, selMonth + 1, 0).getDate();
+    onChange(new Date(y, selMonth, Math.min(selDay + 1, maxDay)));
+    setOpen(false);
+  };
+
   return (
     <>
       <TouchableOpacity
         style={styles.dateInput}
-        onPress={() => setShow(true)}
+        onPress={openPicker}
         testID="expense-date-picker"
         accessibilityLabel="Date"
         accessibilityRole="button"
       >
         <Feather name="calendar" size={16} color={Colors.accent} style={{ marginRight: 8 }} />
-        <Text style={styles.dateText}>{formatDisplayDate(value)}</Text>
+        <Text style={[styles.dateText, { flex: 1 }]}>{formatDisplayDate(value)}</Text>
+        <Feather name="chevron-down" size={14} color={Colors.textMuted} />
       </TouchableOpacity>
-      {show && (
-        <DateTimePicker
-          value={value}
-          mode="date"
-          display="default"
-          onChange={(_: unknown, date?: Date) => {
-            setShow(false);
-            if (date) onChange(date);
-          }}
+
+      <Modal
+        visible={open}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setOpen(false)}
+      >
+        <TouchableOpacity
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }}
+          activeOpacity={1}
+          onPress={() => setOpen(false)}
         />
-      )}
+        <View style={datePickerStyles.sheet}>
+          <View style={datePickerStyles.header}>
+            <TouchableOpacity onPress={() => setOpen(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+              <Text style={datePickerStyles.cancelBtn}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={datePickerStyles.title}>Select Date</Text>
+            <TouchableOpacity onPress={confirm} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+              <Text style={datePickerStyles.doneBtn}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={{ flexDirection: 'row', paddingHorizontal: 8, paddingBottom: 8 }}>
+            <DatePickerColumn items={PICKER_MONTHS} selectedIndex={selMonth} onSelect={setSelMonth} />
+            <DatePickerColumn items={dayItems} selectedIndex={Math.min(selDay, dayItems.length - 1)} onSelect={setSelDay} />
+            <DatePickerColumn items={PICKER_YEARS} selectedIndex={selYear} onSelect={setSelYear} />
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
+
+const datePickerStyles = StyleSheet.create({
+  sheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 34,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  title: {
+    fontSize: Typography.sizeMd,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.textPrimary,
+  },
+  cancelBtn: {
+    fontSize: Typography.sizeMd,
+    fontFamily: Typography.fontRegular,
+    color: Colors.textSecondary,
+  },
+  doneBtn: {
+    fontSize: Typography.sizeMd,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.primary,
+  },
+});
 
 export default function AddExpenseScreen() {
   const params = useLocalSearchParams<{ id?: string }>();

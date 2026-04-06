@@ -59,7 +59,6 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
-    "@react-native-community/datetimepicker": "8.4.4",
     "expo": "~54.0.33",
     "expo-av": "~16.0.8",
     "expo-battery": "~10.0.8",
