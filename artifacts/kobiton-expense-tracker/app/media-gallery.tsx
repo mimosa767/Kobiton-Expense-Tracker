@@ -18,7 +18,6 @@ import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { captureRef } from 'react-native-view-shot';
 import * as ImagePicker from 'expo-image-picker';
 import jsQR from 'jsqr';
 import * as jpeg from 'jpeg-js';
@@ -43,12 +42,6 @@ export default function MediaGalleryScreen() {
   const [cameraVisible, setCameraVisible] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
   const cameraRef = useRef<CameraView | null>(null);
-  // iOS capture ref: points at the View wrapping CameraView so we can
-  // screenshot its rendered pixels with react-native-view-shot.
-  // Kobiton swizzles AVCaptureVideoDataOutput (the live-preview path), NOT
-  // AVCapturePhotoOutput (takePictureAsync path). The only reliable way to
-  // grab the injected frame in JS is to capture what is visually rendered.
-  const cameraContainerRef = useRef<View | null>(null);
 
   useEffect(() => {
     if (tab === 'qr' && Platform.OS !== 'web') {
@@ -58,10 +51,16 @@ export default function MediaGalleryScreen() {
 
   useEffect(() => {
     if (permission?.granted) {
-      // 750 ms warm-up before mounting CameraView.
-      // A shorter delay (350 ms) caused intermittent crashes on the first open
-      // — the AVCaptureSession wasn't fully initialised before the view mounted.
-      const t = setTimeout(() => setCameraVisible(true), 750);
+      // iOS: 1 500 ms warm-up before mounting CameraView.
+      // The Kobiton SDK installs its AVCaptureVideoDataOutput swizzle hooks
+      // asynchronously after the session starts. If CameraView mounts too early
+      // the two initialisation paths race and the app crashes on first open.
+      // 750 ms was insufficient on the iPhone 12 Pro Max test device — first
+      // click reliably crashed. 1 500 ms gives the SDK enough time to settle.
+      // Android doesn't need this guard (CameraView uses Camera2/CameraX which
+      // the Kobiton camera2.aar wraps at a lower level).
+      const delay = Platform.OS === 'ios' ? 1500 : 350;
+      const t = setTimeout(() => setCameraVisible(true), delay);
       return () => clearTimeout(t);
     } else {
       setCameraVisible(false);
@@ -172,28 +171,45 @@ export default function MediaGalleryScreen() {
     }
   }
 
-  // ── iOS: screenshot CameraView via react-native-view-shot ────────────────────
-  // WHY NOT takePictureAsync:
-  //   expo-camera's takePictureAsync uses AVCapturePhotoOutput on iOS.
-  //   Kobiton's SDK swizzles AVCaptureVideoDataOutput (the live-preview path),
-  //   NOT AVCapturePhotoOutput. So takePictureAsync captures the REAL camera
-  //   scene — not the injected frame — and jsQR finds nothing.
+  // ── iOS: KobitonCaptureModule (AVCaptureVideoDataOutput — Kobiton-swizzled) ──
   //
-  // WHY captureRef WORKS:
-  //   react-native-view-shot calls UIView.drawViewHierarchyInRect which, on
-  //   iOS 14+, renders camera preview layers (AVSampleBufferDisplayLayer) into
-  //   the snapshot. Because the preview layer IS fed by the swizzled
-  //   AVCaptureVideoDataOutput buffer, the snapshot contains the injected frame.
+  // WHY NOT takePictureAsync:
+  //   Uses AVCapturePhotoOutput, which Kobiton does NOT swizzle. Captures the
+  //   real camera scene regardless of what the live preview is showing.
+  //
+  // WHY NOT captureRef / react-native-view-shot:
+  //   Uses UIGraphicsBeginImageContextWithOptions (software rendering). Camera
+  //   previews are rendered via AVSampleBufferDisplayLayer (Metal/GPU-composited).
+  //   Software rendering cannot capture Metal content → always returns a black frame.
+  //
+  // SOLUTION — mirrors Android's KobitonCameraModule exactly:
+  //   1. Unmount CameraView so expo-camera releases the AVCaptureSession lock.
+  //   2. KobitonCaptureModule opens its OWN AVCaptureSession + AVCaptureVideoDataOutput.
+  //      Kobiton swizzles EVERY AVCaptureVideoDataOutput delegate, so injected
+  //      frames will arrive in our new output too.
+  //   3. After 1 500 ms (injection settle time), arm the capture and grab the
+  //      next sample buffer → JPEG → base64.
+  //   4. Run jsQR on the JPEG bytes.
+  //   5. Re-mount CameraView.
   async function captureAndDecodeIOS() {
-    if (!cameraContainerRef.current || isCapturing) return;
+    if (isCapturing) return;
     setIsCapturing(true);
+    // Step 1: unmount CameraView to free the AVCaptureSession hardware lock
+    setCameraVisible(false);
     try {
-      const b64 = await captureRef(cameraContainerRef, {
-        format: 'jpg',
-        quality: 0.92,
-        result: 'base64', // pure base64, no data-uri prefix
-      });
-      if (!b64) throw new Error('captureRef returned empty data');
+      const mod = NativeModules.KobitonCaptureModule;
+      if (!mod) {
+        throw new Error(
+          'KobitonCaptureModule is not registered — a new build with the updated plugin is required.'
+        );
+      }
+
+      // Step 2: open our own AVCaptureVideoDataOutput session.
+      // 1 500 ms delay gives Kobiton time to start injecting into the output.
+      const b64: string = await mod.captureFrame(1500);
+      if (!b64) throw new Error('captureFrame returned empty base64 data');
+
+      // Step 3: decode the JPEG with jsQR
       const qrData = await decodeQRFromBase64(b64);
       if (qrData) {
         setScannedResult({ type: 'qr', data: qrData });
@@ -204,10 +220,16 @@ export default function MediaGalleryScreen() {
           'Could not decode a QR code from the captured frame. Make sure the Kobiton-injected image is active in the camera stream and try again.',
         );
       }
-    } catch (e) {
-      Alert.alert('Capture Error', String(e));
+    } catch (e: any) {
+      if (e?.code !== 'E_CANCELLED') {
+        Alert.alert('Capture Error', String(e?.message ?? e));
+      }
     } finally {
       setIsCapturing(false);
+      // Step 4: re-mount the CameraView preview
+      if (permission?.granted) {
+        setTimeout(() => setCameraVisible(true), 350);
+      }
     }
   }
 
@@ -366,24 +388,18 @@ export default function MediaGalleryScreen() {
         {scanning ? (
           <View style={{ flex: 1, position: 'relative' }}>
             {cameraVisible ? (
-              // cameraContainerRef lets captureRef (react-native-view-shot) snapshot
-              // the rendered pixels of the CameraView on iOS, capturing the
-              // Kobiton-injected frame (which drives the preview via the swizzled
-              // AVCaptureVideoDataOutput, not AVCapturePhotoOutput).
-              <View ref={cameraContainerRef as any} style={{ flex: 1 }}>
-                <CameraView
-                  ref={cameraRef as any}
-                  style={{ flex: 1 }}
-                  facing="back"
-                  // On iOS, Kobiton SDK swizzles AVCaptureVideoDataOutput. Enabling
-                  // onBarcodeScanned also activates AVCaptureMetadataOutput, and the
-                  // two outputs conflict on the Kobiton-instrumented session, causing
-                  // a native crash when the CameraView mounts. Disable native barcode
-                  // detection on iOS — the "Capture & Decode" button handles decoding.
-                  onBarcodeScanned={Platform.OS === 'android' ? handleBarcodeScanned : undefined}
-                  barcodeScannerSettings={Platform.OS === 'android' ? { barcodeTypes: ['qr'] } : undefined}
-                />
-              </View>
+              <CameraView
+                ref={cameraRef as any}
+                style={{ flex: 1 }}
+                facing="back"
+                // On iOS, Kobiton SDK swizzles AVCaptureVideoDataOutput. Enabling
+                // onBarcodeScanned also activates AVCaptureMetadataOutput, and the
+                // two outputs conflict on the Kobiton-instrumented session, causing
+                // a native crash when the CameraView mounts. Disable native barcode
+                // detection on iOS — the "Capture & Decode" button handles decoding.
+                onBarcodeScanned={Platform.OS === 'android' ? handleBarcodeScanned : undefined}
+                barcodeScannerSettings={Platform.OS === 'android' ? { barcodeTypes: ['qr'] } : undefined}
+              />
             ) : (
               <View style={[{ flex: 1 }, styles.cameraPlaceholder]}>
                 <ActivityIndicator size="large" color={Colors.primary} />

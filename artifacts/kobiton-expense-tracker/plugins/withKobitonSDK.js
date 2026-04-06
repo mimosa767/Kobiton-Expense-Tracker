@@ -2412,10 +2412,290 @@ function withKobitonIosEmbedFrameworks(config, options) {
   });
 }
 
+// ─── iOS: KobitonCaptureModule native module ──────────────────────────────────
+//
+// iOS equivalent of KobitonCameraModule on Android.
+//
+// Problem: On iOS, Kobiton swizzles AVCaptureVideoDataOutput's sample-buffer
+// delegate method so it can inject frames into the live camera stream.
+// expo-camera's CameraView renders those injected frames via
+// AVSampleBufferDisplayLayer (Metal-composited), which is why the injected
+// QR code IS visible in the camera preview.
+//
+// However:
+//   • takePictureAsync → AVCapturePhotoOutput (NOT swizzled) → real camera frame
+//   • captureRef (react-native-view-shot) → UIGraphicsBeginImageContextWithOptions
+//     (software rendering) → cannot capture Metal/GPU-composited layers → BLACK
+//
+// Solution — mirror the Android approach exactly:
+//   1. JS unmounts CameraView (releases AVCaptureSession hardware lock)
+//   2. JS calls KobitonCaptureModule.captureFrame(delayMs)
+//   3. Native module creates its OWN AVCaptureSession + AVCaptureVideoDataOutput
+//      → Kobiton swizzles THIS output's delegate method too
+//   4. After delayMs, the module arms itself and captures the next sample buffer
+//      (which will contain the Kobiton-injected frame)
+//   5. Converts CMSampleBuffer → UIImage → JPEG → base64, resolves promise
+//   6. JS passes base64 to jsQR for decoding
+//   7. JS re-mounts CameraView
+//
+// This module runs UNCONDITIONALLY (no option flag check) so
+// NativeModules.KobitonCaptureModule is always non-null in the JS layer.
+function withKobitonIosCaptureNativeModule(config) {
+  // Step 1: Write KobitonCaptureModule.m
+  config = withDangerousMod(config, [
+    'ios',
+    async (mod) => {
+      const projectRoot = mod.modRequest.projectRoot;
+      const iosProjectName = 'KobitonExpenseTracker';
+      const iosDir = path.join(projectRoot, 'ios', iosProjectName);
+      if (!fs.existsSync(iosDir)) {
+        fs.mkdirSync(iosDir, { recursive: true });
+      }
+
+      const objcContent = `#import <React/RCTBridgeModule.h>
+#import <AVFoundation/AVFoundation.h>
+#import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
+#import <UIKit/UIKit.h>
+
+extern void RCTRegisterModule(Class);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// KobitonCaptureModule
+//
+// iOS equivalent of the Android KobitonCameraModule / KobitonCameraActivity.
+// Creates its own AVCaptureSession + AVCaptureVideoDataOutput, which the
+// Kobiton SDK swizzles (same as it swizzles the CameraView's output), then
+// captures a single sample buffer and returns it as JPEG base64.
+//
+// JS usage:
+//   const b64 = await NativeModules.KobitonCaptureModule.captureFrame(1500);
+//   // b64 is a raw base64 JPEG string (no data-URI prefix)
+//
+// Flow:
+//   1. JS unmounts CameraView so expo-camera releases the AVCaptureSession.
+//   2. JS calls captureFrame(delayMs) — this opens a new session.
+//   3. After delayMs ms, the module arms itself to capture the next frame.
+//   4. The captured buffer (Kobiton-injected) is returned as JPEG base64.
+//   5. JS re-mounts CameraView.
+// ─────────────────────────────────────────────────────────────────────────────
+@interface KobitonCaptureModule : NSObject <RCTBridgeModule, AVCaptureVideoDataOutputSampleBufferDelegate>
+@end
+
+@implementation KobitonCaptureModule {
+    AVCaptureSession             *_session;
+    AVCaptureVideoDataOutput     *_output;
+    RCTPromiseResolveBlock        _resolve;
+    RCTPromiseRejectBlock         _reject;
+    BOOL                          _armed;    // YES = capture the next arriving frame
+    BOOL                          _settled;  // YES = promise already resolved/rejected
+    dispatch_queue_t              _captureQueue;
+}
+
++ (NSString *)moduleName { return @"KobitonCaptureModule"; }
+
++ (void)load {
+    RCTRegisterModule(self);
+    NSLog(@"[KOBITON] KobitonCaptureModule loaded");
+}
+
+// captureFrame:resolve:reject
+//
+//   delayMs — milliseconds to wait after session start before arming the
+//             capture. The Kobiton SDK needs a moment to start injecting
+//             frames into the AVCaptureVideoDataOutput delegate. 1200–1500 ms
+//             is recommended for reliable injection on first open.
+//
+//   An additional 4-second timeout fires if no frame arrives after arming.
+RCT_EXPORT_METHOD(captureFrame:(double)delayMs
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+    // Guard: don't start a second capture while one is already in progress.
+    if (_session && _session.isRunning) {
+        reject(@"E_BUSY", @"A capture is already in progress — wait for it to finish", nil);
+        return;
+    }
+
+    _resolve  = resolve;
+    _reject   = reject;
+    _armed    = NO;
+    _settled  = NO;
+
+    _captureQueue = dispatch_queue_create("com.kobiton.capture", DISPATCH_QUEUE_SERIAL);
+
+    // Open the back camera
+    AVCaptureDevice *device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+    if (!device) {
+        reject(@"E_NO_CAMERA", @"No back camera device found", nil);
+        return;
+    }
+
+    NSError *err = nil;
+    AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:device error:&err];
+    if (!input) {
+        reject(@"E_CAMERA_INPUT", err.localizedDescription ?: @"Cannot create AVCaptureDeviceInput", nil);
+        return;
+    }
+
+    _session = [[AVCaptureSession alloc] init];
+    _session.sessionPreset = AVCaptureSessionPresetMedium;
+    [_session addInput:input];
+
+    // AVCaptureVideoDataOutput — this is what Kobiton swizzles to inject frames
+    _output = [[AVCaptureVideoDataOutput alloc] init];
+    _output.videoSettings = @{
+        (NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)
+    };
+    _output.alwaysDiscardsLateVideoFrames = YES;
+    [_output setSampleBufferDelegate:self queue:_captureQueue];
+    [_session addOutput:_output];
+
+    [_session startRunning];
+    NSLog(@"[KOBITON] KobitonCaptureModule: session started — arming in %.0f ms", delayMs);
+
+    // Arm after delayMs: by this point Kobiton should be injecting into _output
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayMs * NSEC_PER_MSEC)),
+        dispatch_get_main_queue(),
+        ^{
+            if (!weakSelf->_settled) {
+                weakSelf->_armed = YES;
+                NSLog(@"[KOBITON] KobitonCaptureModule: armed — waiting for injected frame");
+            }
+        }
+    );
+
+    // Timeout: reject if no frame arrives within delayMs + 4000 ms
+    double timeoutSec = (delayMs + 4000.0) / 1000.0;
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeoutSec * NSEC_PER_SEC)),
+        dispatch_get_main_queue(),
+        ^{
+            if (!weakSelf->_settled) {
+                NSLog(@"[KOBITON] KobitonCaptureModule: timeout — no injected frame received");
+                [weakSelf finishWithError:@"E_TIMEOUT"
+                                 message:@"No injected frame received within timeout. Ensure the Kobiton image injection is active and try again."];
+            }
+        }
+    );
+}
+
+// AVCaptureVideoDataOutputSampleBufferDelegate
+- (void)captureOutput:(AVCaptureOutput *)output
+didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+       fromConnection:(AVCaptureConnection *)connection
+{
+    if (!_armed || _settled) return;
+
+    // Disarm immediately so we capture exactly one frame
+    _armed   = NO;
+    _settled = YES;
+    NSLog(@"[KOBITON] KobitonCaptureModule: frame captured — converting to JPEG");
+
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    CVPixelBufferLockBaseAddress(imageBuffer, kCVPixelBufferLockFlags_ReadOnly);
+
+    size_t width       = CVPixelBufferGetWidth(imageBuffer);
+    size_t height      = CVPixelBufferGetHeight(imageBuffer);
+    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer);
+    void  *baseAddress = CVPixelBufferGetBaseAddress(imageBuffer);
+
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(
+        baseAddress, width, height, 8, bytesPerRow,
+        colorSpace,
+        kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst
+    );
+    CGImageRef cgImage = CGBitmapContextCreateImage(context);
+    CGContextRelease(context);
+    CGColorSpaceRelease(colorSpace);
+    CVPixelBufferUnlockBaseAddress(imageBuffer, kCVPixelBufferLockFlags_ReadOnly);
+
+    // Camera frames arrive in landscape; rotate to portrait so jsQR finds the QR code.
+    UIImage *raw    = [UIImage imageWithCGImage:cgImage scale:1.0
+                                    orientation:UIImageOrientationRight];
+    CGImageRelease(cgImage);
+    NSData   *jpeg   = UIImageJPEGRepresentation(raw, 0.9);
+    NSString *base64 = [jpeg base64EncodedStringWithOptions:0];
+
+    [_session stopRunning];
+    _session = nil;
+    _output  = nil;
+
+    if (base64.length == 0) {
+        [self finishWithError:@"E_ENCODE" message:@"JPEG encoding returned empty data"];
+        return;
+    }
+
+    NSLog(@"[KOBITON] KobitonCaptureModule: JPEG length=%lu — resolving promise",
+          (unsigned long)base64.length);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self->_resolve) {
+            self->_resolve(base64);
+            self->_resolve = nil;
+            self->_reject  = nil;
+        }
+    });
+}
+
+- (void)finishWithError:(NSString *)code message:(NSString *)msg
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self->_session stopRunning];
+        self->_session  = nil;
+        self->_output   = nil;
+        self->_settled  = YES;
+        if (self->_reject) {
+            self->_reject(code, msg, nil);
+            self->_resolve = nil;
+            self->_reject  = nil;
+        }
+    });
+}
+
++ (BOOL)requiresMainQueueSetup { return NO; }
+
+@end
+`;
+
+      fs.writeFileSync(path.join(iosDir, 'KobitonCaptureModule.m'), objcContent, 'utf8');
+      console.log('[KobitonSDK] ✓ Wrote KobitonCaptureModule.m (AVCaptureVideoDataOutput → Kobiton-swizzled JPEG capture)');
+
+      return mod;
+    },
+  ]);
+
+  // Step 2: Register KobitonCaptureModule.m in Xcode Sources build phase
+  config = withXcodeProject(config, (mod) => {
+    const xcodeProject = mod.modResults;
+    const appName = mod.modRequest.projectName;
+    const target = xcodeProject.getFirstTarget().uuid;
+    const groupKey = xcodeProject.findPBXGroupKey({ name: appName });
+
+    const sources = xcodeProject.pbxSourcesBuildPhaseObj(target);
+    const alreadyAdded = sources && sources.files &&
+      sources.files.some((f) => {
+        const ref = xcodeProject.pbxFileReferenceSection()[f.value];
+        return ref && ref.path && ref.path.includes('KobitonCaptureModule.m');
+      });
+
+    if (!alreadyAdded) {
+      xcodeProject.addSourceFile(`${appName}/KobitonCaptureModule.m`, { target }, groupKey);
+      console.log('[KobitonSDK] ✓ Registered KobitonCaptureModule.m in Xcode Sources build phase');
+    }
+
+    return mod;
+  });
+
+  return config;
+}
+
 // ─── Main plugin ─────────────────────────────────────────────────────────────
 
 const withKobitonSDK = (config, options = {}) => {
-  console.log('[withKobitonSDK v5.4.0] EXECUTING — options:', JSON.stringify(options));
+  console.log('[withKobitonSDK v5.5.0] EXECUTING — options:', JSON.stringify(options));
 
   config = withKobitonPod(config);
   config = withKobitonInfoPlist(config, options);
@@ -2433,6 +2713,11 @@ const withKobitonSDK = (config, options = {}) => {
   // Android native module runs UNCONDITIONALLY — the Kotlin files must always
   // be compiled so NativeModules.KobitonBiometricModule is non-null in JS.
   config = withKobitonAndroidBiometricNativeModule(config, options);
+
+  // iOS KobitonCaptureModule runs UNCONDITIONALLY — mirrors KobitonCameraModule
+  // on Android. Uses AVCaptureVideoDataOutput (Kobiton-swizzled) to capture the
+  // injected frame, avoiding the black-frame problem of UIGraphicsBeginImageContextWithOptions.
+  config = withKobitonIosCaptureNativeModule(config);
 
   // Both KobitonBiometric.aar and camera2.aar are auto-copied to android/app/libs/
   // by withKobitonAndroidBiometricNativeModule and withKobitonAndroidImageInjection
