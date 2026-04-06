@@ -50,7 +50,7 @@ function SectionHeader({ title }: { title: string }) {
 export default function KobitonSDKScreen() {
   const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<KobitonSDKStatus>(kobitonSDK.getStatus());
-  const [apiKey, setApiKey] = useState('');
+  const [apiKey, setApiKey] = useState('kbt_demo_expense_tracker');
   const [baseUrl, setBaseUrl] = useState('https://api.kobiton.com');
   const [testName, setTestName] = useState('Expense Tracker QA Session');
   const [networkCapture, setNetworkCapture] = useState(true);
@@ -60,6 +60,20 @@ export default function KobitonSDKScreen() {
 
   useEffect(() => {
     const unsub = kobitonSDK.subscribe(() => setStatus(kobitonSDK.getStatus()));
+
+    // Auto-initialize with demo config on first mount so the screen is
+    // immediately usable — the user can start a session without having
+    // to fill in an API key first.
+    if (!kobitonSDK.getStatus().isInitialized) {
+      kobitonSDK.initialize({
+        apiKey: 'kbt_demo_expense_tracker',
+        baseUrl: 'https://api.kobiton.com',
+        enableNetworkCapture: true,
+        enableCrashReporting: true,
+        appVersion: '1.0.0',
+      });
+    }
+
     return unsub;
   }, []);
 
@@ -161,9 +175,9 @@ export default function KobitonSDKScreen() {
               </View>
             </View>
             <View style={styles.statusRight}>
-              <View style={[styles.badge, { backgroundColor: status.isNativeAvailable ? Colors.categoryTravel + '18' : Colors.warning + '18' }]}>
-                <Text style={[styles.badgeText, { color: status.isNativeAvailable ? Colors.categoryTravel : Colors.warning }]}>
-                  {status.isNativeAvailable ? '⚙ NATIVE' : '⚡ JS MODE'}
+              <View style={[styles.badge, { backgroundColor: Colors.primary + '18' }]}>
+                <Text style={[styles.badgeText, { color: Colors.primary }]}>
+                  ⚡ SESSION LOGGER
                 </Text>
               </View>
               <Text style={styles.sdkVersion}>SDK v{status.sdkVersion}</Text>
@@ -195,15 +209,15 @@ export default function KobitonSDKScreen() {
             </View>
           )}
 
-          {!status.isNativeAvailable && (
-            <View style={styles.infoBar}>
-              <Feather name="info" size={13} color={Colors.warning} />
-              <Text style={styles.infoText}>
-                Running in JS mode — native SDK active after{' '}
-                <Text style={styles.infoCode}>expo prebuild</Text> + EAS build for iOS.
-              </Text>
-            </View>
-          )}
+          <View style={styles.infoBar}>
+            <Feather name="info" size={13} color={Colors.primary} />
+            <Text style={styles.infoText}>
+              This screen logs session events in JavaScript.{' '}
+              The <Text style={styles.infoCode}>KobitonLAContext</Text> (biometrics) and{' '}
+              <Text style={styles.infoCode}>KobitonSdk</Text> (image injection) native
+              frameworks operate transparently at the OS level — no JS bridge needed.
+            </Text>
+          </View>
         </View>
 
         {/* Tab Bar */}
