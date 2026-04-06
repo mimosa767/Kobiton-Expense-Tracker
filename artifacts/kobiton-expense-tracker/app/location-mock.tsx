@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -73,7 +74,6 @@ export default function LocationMockScreen() {
   }, [pulseAnim, nativeDriver]);
 
   const readLocation = useCallback(async () => {
-    setStatus('requesting');
     setErrorMsg(null);
     startPulse();
 
@@ -85,12 +85,33 @@ export default function LocationMockScreen() {
     }
 
     try {
-      const { status: perm } = await Location.requestForegroundPermissionsAsync();
-      if (perm !== 'granted') {
-        setStatus('denied');
-        stopPulse();
-        setErrorMsg('Location permission was denied. Grant permission to see the GPS coordinates being received by this device.');
-        return;
+      setStatus('requesting');
+
+      const current = await Location.getForegroundPermissionsAsync();
+      let granted = current.status === 'granted';
+
+      if (!granted) {
+        if (current.status === 'undetermined') {
+          const PERM_TIMEOUT = 15_000;
+          const result = await Promise.race([
+            Location.requestForegroundPermissionsAsync(),
+            new Promise<{ status: Location.PermissionStatus }>((resolve) =>
+              setTimeout(() => resolve({ status: 'denied' as Location.PermissionStatus }), PERM_TIMEOUT)
+            ),
+          ]);
+          granted = result.status === 'granted';
+        }
+
+        if (!granted) {
+          setStatus('denied');
+          stopPulse();
+          setErrorMsg(
+            current.status === 'denied'
+              ? 'Location permission was previously denied. Open Settings to enable it.'
+              : 'Location permission was not granted. Enable it in Settings and tap Refresh.'
+          );
+          return;
+        }
       }
 
       setStatus('acquiring');
@@ -123,6 +144,7 @@ export default function LocationMockScreen() {
   }, [refreshCount]);
 
   const isLoading = status === 'requesting' || status === 'acquiring';
+  const isRefreshDisabled = status === 'acquiring';
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -137,11 +159,11 @@ export default function LocationMockScreen() {
         <Text style={styles.headerTitle}>Location Injection</Text>
         <TouchableOpacity
           onPress={() => setRefreshCount((c) => c + 1)}
-          disabled={isLoading}
+          disabled={isRefreshDisabled}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           testID="refresh-location"
         >
-          <Feather name="refresh-cw" size={20} color={isLoading ? 'rgba(255,255,255,0.4)' : Colors.white} />
+          <Feather name="refresh-cw" size={20} color={isRefreshDisabled ? 'rgba(255,255,255,0.4)' : Colors.white} />
         </TouchableOpacity>
       </View>
 
@@ -195,6 +217,17 @@ export default function LocationMockScreen() {
         </View>
 
         {/* Coordinates display */}
+        {status === 'denied' && (
+          <TouchableOpacity
+            style={styles.settingsBtn}
+            onPress={() => Linking.openSettings()}
+            testID="open-settings-btn"
+          >
+            <Feather name="settings" size={15} color={Colors.white} />
+            <Text style={styles.settingsBtnText}>Open Settings</Text>
+          </TouchableOpacity>
+        )}
+
         {status === 'received' && location ? (
           <>
             <Text style={styles.sectionTitle}>RECEIVED COORDINATES</Text>
@@ -449,6 +482,20 @@ const styles = StyleSheet.create({
     fontFamily: Typography.fontRegular,
     color: Colors.textSecondary,
     lineHeight: 20,
+  },
+  settingsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.textSecondary,
+    borderRadius: Radius.md,
+    paddingVertical: 13,
+  },
+  settingsBtnText: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontSemiBold,
+    color: Colors.white,
   },
 
   stepRow: { flexDirection: 'row', gap: Spacing.md, alignItems: 'flex-start' },

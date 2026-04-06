@@ -19,7 +19,9 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Allow Kobiton Expense Tracker to capture receipt photos.",
         "NSPhotoLibraryUsageDescription": "Allow Kobiton Expense Tracker to select receipt images from your library.",
-        "NSFaceIDUsageDescription": "Allow Face ID to quickly sign in to Kobiton Expense Tracker."
+        "NSFaceIDUsageDescription": "Allow Face ID to quickly sign in to Kobiton Expense Tracker.",
+        "NSLocationWhenInUseUsageDescription": "Allow Kobiton Expense Tracker to read the device GPS so Kobiton location injection can be verified.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Allow Kobiton Expense Tracker to read the device GPS so Kobiton location injection can be verified."
       }
     },
     "android": {
@@ -28,7 +30,9 @@
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.USE_BIOMETRIC",
-        "android.permission.USE_FINGERPRINT"
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
       ]
     },
     "web": {
@@ -44,6 +48,13 @@
       "expo-font",
       "expo-web-browser",
       "expo-image-picker",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Kobiton Expense Tracker to read the device GPS so Kobiton location injection can be verified.",
+          "isIosBackgroundLocationEnabled": false
+        }
+      ],
       [
         "expo-camera",
         {
