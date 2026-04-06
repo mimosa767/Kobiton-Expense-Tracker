@@ -65,6 +65,9 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "autolinking": {
+      "exclude": ["@react-native-community/slider"]
     }
   }
 }
