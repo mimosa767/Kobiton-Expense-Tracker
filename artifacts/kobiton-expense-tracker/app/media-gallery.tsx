@@ -5,6 +5,8 @@ import {
   Clipboard,
   Dimensions,
   Image,
+  NativeModules,
+  PermissionsAndroid,
   Platform,
   ScrollView,
   StyleSheet,
@@ -57,17 +59,115 @@ export default function MediaGalleryScreen() {
     }
   }, [permission?.granted]);
 
-  async function captureAndDecode() {
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Reads a local file:// URI and returns its contents as a base64 string.
+   * Uses the global FileReader (available in both Hermes and JSC) so no
+   * extra package is required.
+   */
+  async function uriToBase64(uri: string): Promise<string> {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // result is "data:<mime>;base64,<data>" — strip the prefix
+        const comma = result.indexOf(',');
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  /**
+   * Decode a base64 JPEG with jpeg-js + jsQR and resolve the scanned QR data,
+   * or null if no QR code was found in the frame.
+   */
+  async function decodeQRFromBase64(b64: string): Promise<string | null> {
+    const raw = Buffer.from(b64, 'base64');
+    const { data, width, height } = jpeg.decode(raw, { useTArray: true });
+    const code = jsQR(new Uint8ClampedArray(data), width, height);
+    return code ? code.data : null;
+  }
+
+  // ── Android: use KobitonCameraModule (kobiton.hardware.camera2) ──────────────
+  // expo-camera / CameraX uses Android's camera2 API but CameraX does NOT
+  // expose the Kobiton-injected frames through its live preview or takePicture
+  // until KobitonCameraActivity has run at least once in the session to warm
+  // up kobiton.hardware.camera2. Calling KobitonCameraModule.openCamera()
+  // directly is the reliable path because it always uses the Kobiton CameraManager.
+  async function captureAndDecodeAndroid() {
+    if (isCapturing) return;
+    setIsCapturing(true);
+    // Unmount CameraView before launching KobitonCameraActivity so both don't
+    // compete for the camera2 hardware resource simultaneously.
+    setCameraVisible(false);
+    try {
+      // 1. Request camera permission (Android 6+)
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.CAMERA,
+        {
+          title: 'Camera Permission',
+          message: 'Camera access is required to capture and decode QR codes.',
+          buttonPositive: 'Allow',
+          buttonNegative: 'Cancel',
+        }
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        Alert.alert('Permission Denied', 'Camera permission is required to scan QR codes.');
+        return;
+      }
+
+      // 2. Open KobitonCameraActivity — this uses kobiton.hardware.camera2
+      //    and will capture the Kobiton-injected frame.
+      const mod = NativeModules.KobitonCameraModule;
+      if (!mod) {
+        Alert.alert('Not Available', 'KobitonCameraModule is not registered in this build.');
+        return;
+      }
+      const uri: string = await mod.openCamera();
+
+      // 3. Read the captured JPEG as base64, then run jsQR on its pixels.
+      const b64 = await uriToBase64(uri);
+      const qrData = await decodeQRFromBase64(b64);
+
+      if (qrData) {
+        setScannedResult({ type: 'qr', data: qrData });
+        setScanning(false);
+      } else {
+        Alert.alert(
+          'No QR Code Found',
+          'The captured frame did not contain a readable QR code. Make sure the injected image is a valid QR code and try again.'
+        );
+      }
+    } catch (err: any) {
+      if (err?.code !== 'E_CANCELLED') {
+        Alert.alert('Capture Error', String(err?.message ?? err));
+      }
+    } finally {
+      setIsCapturing(false);
+      // Restore camera preview after KobitonCameraActivity returns
+      if (permission?.granted) {
+        setTimeout(() => setCameraVisible(true), 350);
+      }
+    }
+  }
+
+  // ── iOS: takePicture from CameraView (AVCaptureVideoDataOutput) ───────────────
+  // Kobiton's KobitonSdk.framework swizzles AVCaptureVideoDataOutput at the OS
+  // level so takePicture() captures the injected frame directly.
+  async function captureAndDecodeIOS() {
     if (!cameraRef.current || isCapturing) return;
     setIsCapturing(true);
     try {
       const pic = await cameraRef.current.takePicture({ base64: true, quality: 0.9 });
       if (!pic.base64) throw new Error('No base64 data from camera');
-      const raw = Buffer.from(pic.base64, 'base64');
-      const { data, width, height } = jpeg.decode(raw, { useTArray: true });
-      const code = jsQR(new Uint8ClampedArray(data), width, height);
-      if (code) {
-        setScannedResult({ type: 'qr', data: code.data });
+      const qrData = await decodeQRFromBase64(pic.base64);
+      if (qrData) {
+        setScannedResult({ type: 'qr', data: qrData });
         setScanning(false);
       } else {
         Alert.alert('No QR Code Found', 'Could not decode a QR code from the captured frame. Make sure the injected image is a valid QR code and try again.');
@@ -76,6 +176,14 @@ export default function MediaGalleryScreen() {
       Alert.alert('Capture Error', String(e));
     } finally {
       setIsCapturing(false);
+    }
+  }
+
+  function captureAndDecode() {
+    if (Platform.OS === 'android') {
+      captureAndDecodeAndroid();
+    } else {
+      captureAndDecodeIOS();
     }
   }
 

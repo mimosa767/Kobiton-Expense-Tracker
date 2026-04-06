@@ -29,21 +29,37 @@ const LOAD_CONFIG: Record<LoadLevel, {
 };
 
 // ─── Real CPU load ────────────────────────────────────────────────────────────
-// Each loop runs tight math for 14 ms then yields via setTimeout(0) and repeats.
-// Multiple concurrent loops saturate multiple JS threads / cores.
+// Each loop runs tight math then yields and immediately re-schedules.
+// • setImmediate fires before the next I/O poll (tighter than setTimeout(0))
+//   so there is less idle time between busy-work bursts on Android/Hermes.
+// • 20 ms busy window (up from 14 ms) means ~95% CPU time per loop per core.
+// • Multiple concurrent loops saturate multiple cores; the Hermes runtime
+//   maps each loop to the same OS thread but Kobiton still sees the aggregate
+//   process CPU climb because the thread never sleeps.
 let _cpuRunning = false;
+
+// setImmediate may not exist on older Hermes builds — fall back to setTimeout.
+const _yieldFn: (cb: () => void) => void =
+  typeof setImmediate !== 'undefined'
+    ? (cb) => setImmediate(cb)
+    : (cb) => setTimeout(cb, 0);
 
 function startCPULoad(concurrency: number) {
   _cpuRunning = true;
   for (let c = 0; c < concurrency; c++) {
     (function loop(seed: number) {
       if (!_cpuRunning) return;
-      const deadline = performance.now() + 14;
+      // Busy-spin for 20 ms with heavy floating-point math.
+      const deadline = performance.now() + 20;
       let v = seed;
       while (performance.now() < deadline) {
-        v = Math.sqrt(Math.abs(v) + 1.1) * Math.PI + Math.log(Math.abs(v) + 2) + Math.sin(v);
+        v = Math.sqrt(Math.abs(v) + 1.1) * Math.PI
+          + Math.log(Math.abs(v) + 2)
+          + Math.sin(v)
+          + Math.cos(v * 0.7)
+          + Math.atan2(v, 1.3);
       }
-      setTimeout(() => loop(v), 0);
+      _yieldFn(() => loop(v));
     })(c * 137.3);
   }
 }
@@ -53,29 +69,55 @@ function stopCPULoad() {
 }
 
 // ─── Real memory pressure ─────────────────────────────────────────────────────
-// Allocates filled Float64Arrays so the OS commits the pages, then continuously
-// reads and writes random positions across all blocks so:
-//   1. The Hermes / JavaScriptCore GC cannot reclaim the pages (they have live refs
-//      AND are being accessed on every thrash tick).
-//   2. The OS cannot silently page them out — recent writes keep them hot in RAM.
-//   3. The Kobiton memory graph rises and stays elevated for the full session.
+// Strategy: two-layer allocation so memory is visible in Kobiton's OS-level
+// process metrics on both iOS and Android.
 //
-// Without the thrash loop, GC marking + the OS pager can quietly reclaim cold
-// pages even though _memBlocks still holds the array references, which is why
-// the memory metric appeared flat in practice.
+// Layer 1 — JS Float64Arrays (Hermes / JSC heap)
+//   Keeps the JS engine itself under heap pressure. Without a thrash loop the
+//   GC marks cold pages as collectable so we continuously dirty them.
+//
+// Layer 2 — Blob objects (native byte buffers)
+//   In React Native, Blob data is backed by:
+//     iOS  → NSData — counted directly in the process's RSS / dirty memory
+//     Android → byte[] on the Java heap — visible in the native process RSS
+//   Because these are OS-level allocations (not just JS heap), Kobiton's
+//   system memory graph rises as soon as the Blobs are created.
+//   Float64Arrays alone were invisible in the Kobiton dashboard because the
+//   Hermes GC can reclaim or compact them without touching the OS page tables.
+
 let _memBlocks: Float64Array[] = [];
+let _memBlobs: Blob[] = [];
 let _memRunning = false;
 
 function allocateMemory(mb: number) {
   releaseMemory();
+
+  // --- Layer 1: JS heap pressure (thrash loop keeps pages hot) ---
   const floatsPerMB = 131072; // 8 bytes × 131,072 = 1 MiB
   const chunkMB = 10;
   const chunks = Math.ceil(mb / chunkMB);
   for (let i = 0; i < chunks; i++) {
     const chunkSize = Math.min(chunkMB, mb - i * chunkMB);
     const block = new Float64Array(chunkSize * floatsPerMB);
-    block.fill(Math.random() * Math.PI); // initial commit — write every byte
+    block.fill(Math.random() * Math.PI); // initial write — commits all pages
     _memBlocks.push(block);
+  }
+
+  // --- Layer 2: Native byte-buffer Blobs (OS RSS visible to Kobiton) ---
+  // Allocate in 5 MB chunks via ArrayBuffer → Blob. The Blob constructor in
+  // React Native (both Hermes and JSC) copies the bytes into a native buffer
+  // (NSData / byte[]), which Kobiton measures in the process memory graph.
+  const blobChunkBytes = 5 * 1024 * 1024; // 5 MiB per blob
+  const blobCount = Math.ceil(mb / 5);
+  const seed = new Uint8Array(blobChunkBytes);
+  // Write a non-zero pattern so the OS must actually commit the pages.
+  for (let i = 0; i < seed.length; i += 4096) seed[i] = 0xff;
+  for (let b = 0; b < blobCount; b++) {
+    try {
+      _memBlobs.push(new Blob([seed.buffer]));
+    } catch (_) {
+      break; // device OOM guard — stop rather than crash
+    }
   }
 }
 
@@ -83,8 +125,8 @@ function startMemoryThrash() {
   _memRunning = true;
   (function thrash() {
     if (!_memRunning || _memBlocks.length === 0) return;
-    // Spend ~8 ms writing to random positions across all allocated blocks.
-    // This keeps pages hot in RAM and forces the OS to account for them.
+    // Spend ~8 ms writing to random positions across all JS Float64Array blocks.
+    // This keeps JS pages hot in RAM so the GC does not reclaim them.
     const deadline = performance.now() + 8;
     while (performance.now() < deadline) {
       const blockIdx = (_memBlocks.length * Math.random()) | 0;
@@ -99,6 +141,7 @@ function startMemoryThrash() {
 function releaseMemory() {
   _memRunning = false;
   _memBlocks = [];
+  _memBlobs = []; // drops all Blob references → native buffers freed by GC
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────

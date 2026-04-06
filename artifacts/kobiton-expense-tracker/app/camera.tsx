@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   NativeModules,
+  PermissionsAndroid,
   Platform,
   StyleSheet,
   Text,
@@ -58,21 +59,46 @@ function AndroidKobitonCamera() {
     if (launched.current) return;
     launched.current = true;
 
-    const mod = NativeModules.KobitonCameraModule;
-    if (!mod) {
-      console.error('[CameraScreen] KobitonCameraModule not available — NativeModules:', Object.keys(NativeModules));
-      setError('KobitonCameraModule is not registered.\nRun expo prebuild and rebuild the app.');
-      return;
-    }
+    (async () => {
+      const mod = NativeModules.KobitonCameraModule;
+      if (!mod) {
+        console.error('[CameraScreen] KobitonCameraModule not available — NativeModules:', Object.keys(NativeModules));
+        setError('KobitonCameraModule is not registered.\nRun expo prebuild and rebuild the app.');
+        return;
+      }
 
-    mod.openCamera()
-      .then((uri: string) => {
+      // Android requires explicit runtime permission before any Activity can
+      // open the camera hardware. KobitonCameraActivity doesn't request it
+      // internally — if permission hasn't been granted the activity opens and
+      // immediately returns cancelled, making the button appear broken on the
+      // first tap (subsequent taps work because the permission is now cached).
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+          {
+            title: 'Camera Permission',
+            message: 'This app needs access to your camera to capture receipt photos.',
+            buttonPositive: 'Allow',
+            buttonNegative: 'Cancel',
+          }
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          console.log('[CameraScreen] Camera permission denied');
+          clearCameraCallback();
+          router.back();
+          return;
+        }
+      } catch (permErr) {
+        console.warn('[CameraScreen] Permission request error:', permErr);
+      }
+
+      try {
+        const uri: string = await mod.openCamera();
         console.log('[CameraScreen] KobitonCameraModule.openCamera resolved →', uri);
         const fileName = `receipt_${Date.now()}.jpg`;
         callCameraCallback(uri, fileName);
         router.back();
-      })
-      .catch((err: any) => {
+      } catch (err: any) {
         const code: string = err?.code ?? '';
         if (code === 'E_CANCELLED') {
           console.log('[CameraScreen] KobitonCameraModule: user cancelled');
@@ -81,7 +107,8 @@ function AndroidKobitonCamera() {
         }
         clearCameraCallback();
         router.back();
-      });
+      }
+    })();
   }, [router]);
 
   if (error) {
