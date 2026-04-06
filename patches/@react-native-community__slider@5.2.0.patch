@@ -1,0 +1,18 @@
+diff --git a/react-native-slider.podspec b/react-native-slider.podspec
+index b795d531ffed6e39b8b258d7b596bad684ebb988..1749e19611f30c25b3fd02a6c03c96ba34df731e 100644
+--- a/react-native-slider.podspec
++++ b/react-native-slider.podspec
+@@ -13,7 +13,12 @@ Pod::Spec.new do |s|
+   s.platforms    = { :ios => "9.0", :visionos => "1.0" }
+ 
+   s.source       = { :git => "https://github.com/callstack/react-native-slider.git", :tag => "v#{s.version}" }
+-  s.source_files = "ios/**/*.{h,m,mm}"
++  # [KobitonFix] Exclude Fabric component view — RNCSliderComponentDescriptor.h is
++  # not generated for projects using autolinking.exclude for slider. Unconditionally
++  # excluding these files lets the pod compile without Codegen-generated headers.
++  # See: https://github.com/callstack/react-native-slider/issues/744
++  s.source_files = "ios/**/*.{h,m}"
++  s.exclude_files = "ios/**/RNCSliderComponentView.{h,mm}"
+ 
+   s.subspec "common" do |ss|
+     ss.source_files         = "common/cpp/**/*.{cpp,h}"

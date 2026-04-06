@@ -12,6 +12,9 @@
   "pnpm": {
     "overrides": {
       "@react-native-community/slider": "5.2.0"
+    },
+    "patchedDependencies": {
+      "@react-native-community/slider@5.2.0": "patches/@react-native-community__slider@5.2.0.patch"
     }
   },
   "devDependencies": {

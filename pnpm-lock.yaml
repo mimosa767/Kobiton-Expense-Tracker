@@ -70,6 +70,11 @@ catalogs:
 overrides:
   '@react-native-community/slider': 5.2.0
 
+patchedDependencies:
+  '@react-native-community/slider@5.2.0':
+    hash: 3f9471af79f8f6ba149e0a332a3ce259960e31ca0af056d0a5f5d02977a426e0
+    path: patches/@react-native-community__slider@5.2.0.patch
+
 importers:
 
   .:
@@ -141,6 +146,9 @@ importers:
       '@react-native-community/datetimepicker':
         specifier: 8.4.4
         version: 8.4.4(expo@54.0.33)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+      '@react-native-community/slider':
+        specifier: 5.2.0
+        version: 5.2.0(patch_hash=3f9471af79f8f6ba149e0a332a3ce259960e31ca0af056d0a5f5d02977a426e0)
       expo:
         specifier: ~54.0.33
         version: 54.0.33(@babel/core@7.29.0)(@expo/metro-runtime@6.1.2)(expo-router@6.0.23)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
@@ -2501,6 +2509,9 @@ packages:
         optional: true
       react-native-windows:
         optional: true
+
+  '@react-native-community/slider@5.2.0':
+    resolution: {integrity: sha512-484sH8aWEaSjxaZ7HT3YZ8CKDcNes2synko1vdEz5DFEdvKAduxKJTj22L/qBMD7rtIkfbX69DMzWDAGbOAV6w==}
 
   '@react-native/assets-registry@0.81.5':
     resolution: {integrity: sha512-705B6x/5Kxm1RKRvSv0ADYWm5JOnoiQ1ufW7h8uu2E6G9Of/eE6hP/Ivw3U5jI16ERqZxiKQwk34VJbB0niX9w==}
@@ -8735,6 +8746,8 @@ snapshots:
       react-native: 0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0)
     optionalDependencies:
       expo: 54.0.33(@babel/core@7.29.0)(@expo/metro-runtime@6.1.2)(expo-router@6.0.23)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+
+  '@react-native-community/slider@5.2.0(patch_hash=3f9471af79f8f6ba149e0a332a3ce259960e31ca0af056d0a5f5d02977a426e0)': {}
 
   '@react-native/assets-registry@0.81.5': {}
 

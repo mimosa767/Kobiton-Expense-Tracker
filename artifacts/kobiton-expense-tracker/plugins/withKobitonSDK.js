@@ -270,40 +270,63 @@ post_install do |installer|
                  "// RNCSliderComponentDescriptor.h is not generated for this project.\\n" \
                  "// This file is replaced with a stub to prevent a fatal build error.\\n"
 
-  # Search for the file using multiple strategies.
-  # Strategy 1: relative to the Podfile (works for standard EAS pnpm monorepo layout)
-  #   Podfile at: <projectRoot>/ios/Podfile  ->  __dir__ = <projectRoot>/ios
-  #   ../../../node_modules = <workspaceRoot>/node_modules
-  search_bases = [
+  # NOTE: The primary fix is the pnpm patch on react-native-slider.podspec which
+  # unconditionally removes RNCSliderComponentView.{h,mm} from s.source_files so
+  # CocoaPods never adds the file to the Xcode project at all. This post_install
+  # hook is a belt-and-suspenders fallback in case the pnpm patch doesn't apply
+  # (e.g. version mismatch, older slider installed by a transitive dep, etc.).
+
+  # Collect all candidate file paths to check/stub.
+  candidates = []
+
+  # Strategy 1 — pnpm virtual store (default pnpm layout).
+  # Podfile at: <projectRoot>/ios/Podfile  ->  __dir__ = <projectRoot>/ios
+  # Walk up to find the workspace root node_modules/.pnpm
+  pnpm_bases = [
     File.expand_path('../../../node_modules/.pnpm', __dir__),
     File.expand_path('../../node_modules/.pnpm', __dir__),
     File.expand_path('../node_modules/.pnpm', __dir__),
+    '/Users/expo/workingdir/build/node_modules/.pnpm',
   ]
-  # Strategy 2: hardcoded EAS absolute path confirmed in build logs
-  search_bases << '/Users/expo/workingdir/build/node_modules/.pnpm'
-
-  patched = false
-  search_bases.uniq.each do |pnpm_base|
+  pnpm_bases.uniq.each do |pnpm_base|
     next unless Dir.exist?(pnpm_base)
     pattern = File.join(pnpm_base,
       '@react-native-community+slider*',
       'node_modules', '@react-native-community', 'slider',
       'ios', 'RNCSliderComponentView.mm')
-    Dir.glob(pattern) do |slider_mm|
-      current = File.read(slider_mm) rescue nil
-      next unless current
-      if current.include?('[KobitonFix]')
-        Pod::UI.puts "[KobitonSDK] \u2713 RNCSliderComponentView.mm already stubbed: #{slider_mm}"
-      else
-        File.write(slider_mm, stub_content)
-        Pod::UI.puts "[KobitonSDK] \u2713 Stubbed RNCSliderComponentView.mm: #{slider_mm}"
-      end
-      patched = true
-    end
+    Dir.glob(pattern) { |p| candidates << p }
   end
 
-  unless patched
-    Pod::UI.puts '[KobitonSDK] \u2139 RNCSliderComponentView.mm not found in any pnpm store path'
+  # Strategy 2 — hoisted / direct node_modules path (non-pnpm or pnpm hoisted mode).
+  # pnpm may hoist packages to node_modules directly when shamefully hoisted.
+  direct_nm_roots = [
+    File.expand_path('../../../node_modules', __dir__),
+    File.expand_path('../../node_modules', __dir__),
+    File.expand_path('../node_modules', __dir__),
+    '/Users/expo/workingdir/build/node_modules',
+  ]
+  direct_nm_roots.uniq.each do |nm_root|
+    candidate = File.join(nm_root, '@react-native-community', 'slider', 'ios', 'RNCSliderComponentView.mm')
+    candidates << candidate if File.exist?(candidate)
+  end
+
+  patched = false
+  candidates.uniq.each do |slider_mm|
+    current = File.read(slider_mm) rescue nil
+    next unless current
+    if current.include?('[KobitonFix]')
+      Pod::UI.puts "[KobitonSDK] \u2713 RNCSliderComponentView.mm already stubbed: #{slider_mm}"
+    else
+      File.write(slider_mm, stub_content)
+      Pod::UI.puts "[KobitonSDK] \u2713 Stubbed RNCSliderComponentView.mm: #{slider_mm}"
+    end
+    patched = true
+  end
+
+  if patched
+    Pod::UI.puts "[KobitonSDK] \u2139 Slider stub summary: #{candidates.length} file(s) processed"
+  else
+    Pod::UI.puts '[KobitonSDK] \u2139 RNCSliderComponentView.mm not found in any search path (pnpm patch may have excluded it from pod sources already)'
   end
 end
 `;
