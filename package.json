@@ -10,12 +10,13 @@
   },
   "private": true,
   "devDependencies": {
-    "typescript": "~5.9.2",
-    "prettier": "^3.8.1"
+    "@react-native-community/slider": "5.1.2",
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.2"
   },
   "pnpm": {
-    "overrides": {
-      "@react-native-community/slider": "4.5.5"
+    "patchedDependencies": {
+      "@react-native-community/slider@5.1.2": "patches/@react-native-community__slider@5.1.2.patch"
     }
   }
 }
