@@ -34,8 +34,16 @@
       }
     },
     "production": {
+      "cache": {
+        "disabled": true
+      },
       "android": {
         "buildType": "app-bundle"
+      },
+      "ios": {
+        "cache": {
+          "disabled": true
+        }
       }
     }
   }
