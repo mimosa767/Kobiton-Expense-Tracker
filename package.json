@@ -9,14 +9,7 @@
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },
   "private": true,
-  "pnpm": {
-    "overrides": {
-      "@react-native-community/slider": "5.2.0"
-    },
-    "patchedDependencies": {
-      "@react-native-community/slider@5.2.0": "patches/@react-native-community__slider@5.2.0.patch"
-    }
-  },
+  "pnpm": {},
   "devDependencies": {
     "prettier": "^3.8.1",
     "typescript": "~5.9.2"
