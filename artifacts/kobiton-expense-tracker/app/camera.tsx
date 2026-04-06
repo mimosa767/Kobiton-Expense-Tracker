@@ -8,23 +8,11 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { callCameraCallback, clearCameraCallback } from '@/src/utils/cameraCallback';
-
-// Vision Camera is only used on iOS — on Android we delegate to the
-// native KobitonCameraActivity via KobitonCameraModule.
-let Camera: any = null;
-let useCameraDevice: any = null;
-let useCameraPermission: any = null;
-
-if (Platform.OS === 'ios') {
-  const visionCamera = require('react-native-vision-camera');
-  Camera = visionCamera.Camera;
-  useCameraDevice = visionCamera.useCameraDevice;
-  useCameraPermission = visionCamera.useCameraPermission;
-}
 
 const Colors = {
   primary: '#0F2D8A',
@@ -60,11 +48,6 @@ function WebFallback() {
  * kobiton.hardware.camera2.CameraManager instead of the stock Android
  * camera2 manager, which lets the Kobiton platform inject synthetic frames
  * during test sessions.
- *
- * While the activity is open this screen shows a loading indicator.
- * When the activity finishes it resolves the promise with a file:// URI
- * (or rejects with E_CANCELLED), at which point we fire the callback and
- * navigate back.
  */
 function AndroidKobitonCamera() {
   const router = useRouter();
@@ -92,7 +75,6 @@ function AndroidKobitonCamera() {
       .catch((err: any) => {
         const code: string = err?.code ?? '';
         if (code === 'E_CANCELLED') {
-          // User tapped the cancel button in KobitonCameraActivity — silent dismiss
           console.log('[CameraScreen] KobitonCameraModule: user cancelled');
         } else {
           console.error('[CameraScreen] KobitonCameraModule.openCamera rejected:', err);
@@ -117,7 +99,6 @@ function AndroidKobitonCamera() {
     );
   }
 
-  // Loading screen shown while KobitonCameraActivity is open on top
   return (
     <View style={styles.permissionContainer}>
       <ActivityIndicator color={Colors.white} size="large" />
@@ -126,22 +107,25 @@ function AndroidKobitonCamera() {
   );
 }
 
-// ─── iOS: Vision Camera ────────────────────────────────────────────────────────
+// ─── iOS: expo-camera (AVCaptureSession — Kobiton image injection intercepts here) ──
 
-function IosVisionCamera() {
+/**
+ * Uses expo-camera on iOS. Kobiton's KobitonSdk.framework swizzles
+ * AVCaptureSession at the OS level, so it intercepts camera frames from
+ * any camera library — expo-camera, vision-camera, or AVFoundation directly.
+ */
+function IosCameraScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const cameraRef = useRef<any>(null);
+  const cameraRef = useRef<CameraView>(null);
   const [capturing, setCapturing] = useState(false);
   const [facing, setFacing] = useState<'back' | 'front'>('back');
-
-  const { hasPermission, requestPermission } = useCameraPermission();
-  const device = useCameraDevice(facing);
+  const [permission, requestPermission] = useCameraPermissions();
 
   // Auto-request permission on mount so the OS prompt fires immediately
-  // and the Kobiton platform can intercept it — no manual "Grant" tap needed.
+  // and the Kobiton platform can intercept it.
   useEffect(() => {
-    if (!hasPermission) {
+    if (permission && !permission.granted) {
       requestPermission();
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -150,16 +134,20 @@ function IosVisionCamera() {
     if (!cameraRef.current || capturing) return;
     try {
       setCapturing(true);
-      const photo = await cameraRef.current.takePhoto({
-        flash: 'off',
-        enableShutterSound: true,
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.85,
+        skipProcessing: false,
       });
-      const uri = photo.path;
+      if (!photo) {
+        setCapturing(false);
+        return;
+      }
+      const uri = photo.uri;
       const fileName = `receipt_${Date.now()}.jpg`;
       callCameraCallback(uri, fileName);
       router.back();
     } catch (err) {
-      console.error('[CameraScreen] takePhoto error:', err);
+      console.error('[CameraScreen] takePictureAsync error:', err);
       setCapturing(false);
     }
   }, [capturing, router]);
@@ -173,29 +161,13 @@ function IosVisionCamera() {
     setFacing(f => f === 'back' ? 'front' : 'back');
   }, []);
 
-  // Pre-checks removed for iOS — Kobiton's image injection SDK intercepts at
-  // the AVCaptureSession level. Blocking on !hasPermission or !device would
-  // prevent the camera session from ever starting, which is the same issue
-  // we fixed on the biometric side with isEnrolledAsync().
-  // The <Camera> component is rendered conditionally on device so Vision Camera
-  // does not crash — it mounts as soon as device resolves (immediately on a
-  // real or Kobiton-managed device once permission is auto-requested above).
-
   return (
     <View style={styles.container}>
-      {device ? (
-        <Camera
-          ref={cameraRef}
-          style={StyleSheet.absoluteFill}
-          device={device}
-          isActive={true}
-          photo={true}
-        />
-      ) : (
-        // device resolves once permission is granted (auto-requested on mount).
-        // Renders a black background; Kobiton injects frames once AVCaptureSession starts.
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: Colors.black }]} />
-      )}
+      <CameraView
+        ref={cameraRef}
+        style={StyleSheet.absoluteFill}
+        facing={facing}
+      />
 
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity onPress={handleCancel} style={styles.iconBtn} accessibilityLabel="Cancel">
@@ -231,7 +203,7 @@ function IosVisionCamera() {
 export default function CameraScreen() {
   if (Platform.OS === 'web')     return <WebFallback />;
   if (Platform.OS === 'android') return <AndroidKobitonCamera />;
-  return <IosVisionCamera />;
+  return <IosCameraScreen />;
 }
 
 // ─── Styles ────────────────────────────────────────────────────────────────────

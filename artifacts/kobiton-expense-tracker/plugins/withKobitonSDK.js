@@ -433,8 +433,9 @@ function withKobitonIosImageInjection(config, options) {
     },
   ]);
 
-  // Step 2: Add FRAMEWORK_SEARCH_PATHS to every Xcode build configuration
-  // so the linker can find KobitonSdk.framework in ios/KobitonFrameworks/
+  // Step 2: Add FRAMEWORK_SEARCH_PATHS + -ObjC linker flag to every Xcode build configuration
+  // so the linker can find KobitonSdk.framework at build time.
+  // Framework embedding (Embed & Sign) is handled centrally by withKobitonIosEmbedFrameworks.
   config = withXcodeProject(config, (mod) => {
     const xcodeProject = mod.modResults;
     const buildConfigurations = xcodeProject.pbxXCBuildConfigurationSection();
@@ -444,8 +445,9 @@ function withKobitonIosImageInjection(config, options) {
       if (typeof buildConfig !== 'object' || !buildConfig.buildSettings) return;
 
       const settings = buildConfig.buildSettings;
-      const current = settings.FRAMEWORK_SEARCH_PATHS;
 
+      // FRAMEWORK_SEARCH_PATHS — lets the linker find the .framework at link time
+      const current = settings.FRAMEWORK_SEARCH_PATHS;
       if (!current) {
         settings.FRAMEWORK_SEARCH_PATHS = [kobitonPath, '"$(inherited)"'];
       } else if (typeof current === 'string') {
@@ -455,6 +457,21 @@ function withKobitonIosImageInjection(config, options) {
       } else if (Array.isArray(current)) {
         if (!current.some((p) => typeof p === 'string' && p.includes('KobitonFrameworks'))) {
           current.push(kobitonPath);
+        }
+      }
+
+      // -ObjC linker flag — required so ObjC categories/classes from the framework load correctly
+      const ldflags = settings.OTHER_LDFLAGS;
+      const objcFlag = '"-ObjC"';
+      if (!ldflags) {
+        settings.OTHER_LDFLAGS = ['"$(inherited)"', objcFlag];
+      } else if (typeof ldflags === 'string') {
+        if (!ldflags.includes('-ObjC')) {
+          settings.OTHER_LDFLAGS = [ldflags, objcFlag];
+        }
+      } else if (Array.isArray(ldflags)) {
+        if (!ldflags.some((f) => typeof f === 'string' && f.includes('-ObjC'))) {
+          ldflags.push(objcFlag);
         }
       }
     });
@@ -659,6 +676,7 @@ function withKobitonIosBiometric(config, options) {
   // Step 2: Add FRAMEWORK_SEARCH_PATHS for KobitonLAContext.framework.
   // Only needed when imageInjectionSupport is NOT also enabled, because that
   // plugin already adds "$(PROJECT_DIR)/KobitonFrameworks" to all build configs.
+  // Framework embedding (Embed & Sign) is handled centrally by withKobitonIosEmbedFrameworks.
   if (!options.imageInjectionSupport) {
     config = withXcodeProject(config, (mod) => {
       const xcodeProject = mod.modResults;
@@ -1935,14 +1953,31 @@ function withKobitonIosEmbedFrameworks(config, options) {
     if (options.imageInjectionSupport) {
       frameworks.push({ name: 'KobitonSdk.framework', path: 'KobitonFrameworks/KobitonSdk.framework' });
     }
+
+    const fileRefs = xcodeProject.pbxFileReferenceSection();
+
     for (const fw of frameworks) {
-      xcodeProject.addFramework(fw.path, {
-        customFramework: true,
-        embed: true,
-        sign: true,
-        link: true,
-      });
-      console.log(`[KobitonSDK] ✓ Embedded ${fw.name} via xcodeProject.addFramework()`);
+      // Idempotency check — safe to run expo prebuild multiple times
+      const alreadyAdded = Object.values(fileRefs).some(
+        (ref) => typeof ref === 'object' && ref.path && String(ref.path).includes(fw.name)
+      );
+      if (alreadyAdded) {
+        console.log(`[KobitonSDK] ✓ ${fw.name} already embedded in Xcode project — skipping`);
+        continue;
+      }
+
+      try {
+        xcodeProject.addFramework(fw.path, {
+          customFramework: true,
+          embed: true,
+          sign: true,
+          link: true,
+        });
+        console.log(`[KobitonSDK] ✓ Embedded ${fw.name} as Embed & Sign via xcodeProject.addFramework()`);
+      } catch (e) {
+        console.warn(`[KobitonSDK] ⚠ Could not embed ${fw.name} automatically: ${e.message}`);
+        console.warn(`[KobitonSDK]   → Manual fix: Xcode → General → Frameworks, Libraries, Embedded Content → ${fw.name} → Embed & Sign`);
+      }
     }
     return mod;
   });

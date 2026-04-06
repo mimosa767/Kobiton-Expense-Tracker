@@ -45,9 +45,9 @@
       "expo-web-browser",
       "expo-image-picker",
       [
-        "react-native-vision-camera",
+        "expo-camera",
         {
-          "cameraPermissionText": "Allow Kobiton Expense Tracker to capture receipt photos."
+          "cameraPermission": "Allow Kobiton Expense Tracker to capture receipt photos."
         }
       ],
       [
