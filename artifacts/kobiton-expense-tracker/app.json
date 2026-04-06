@@ -21,7 +21,8 @@
         "NSPhotoLibraryUsageDescription": "Allow Kobiton Expense Tracker to select receipt images from your library.",
         "NSFaceIDUsageDescription": "Allow Face ID to quickly sign in to Kobiton Expense Tracker.",
         "NSLocationWhenInUseUsageDescription": "Allow Kobiton Expense Tracker to read the device GPS so Kobiton location injection can be verified.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "Allow Kobiton Expense Tracker to read the device GPS so Kobiton location injection can be verified."
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Allow Kobiton Expense Tracker to read the device GPS so Kobiton location injection can be verified.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
