@@ -2554,16 +2554,18 @@ RCT_EXPORT_METHOD(captureFrame:(double)delayMs
     [_session startRunning];
     NSLog(@"[KOBITON] KobitonCaptureModule: session started — arming in %.0f ms", delayMs);
 
-    // Arm after delayMs: by this point Kobiton should be injecting into _output
-    __weak typeof(self) weakSelf = self;
+    // Arm after delayMs: by this point Kobiton should be injecting into _output.
+    // Must capture weakSelf into a strong local before accessing ivars —
+    // clang forbids dereferencing a __weak pointer directly (race condition).
+    __weak KobitonCaptureModule *weakSelf = self;
     dispatch_after(
         dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayMs * NSEC_PER_MSEC)),
         dispatch_get_main_queue(),
         ^{
-            if (!weakSelf->_settled) {
-                weakSelf->_armed = YES;
-                NSLog(@"[KOBITON] KobitonCaptureModule: armed — waiting for injected frame");
-            }
+            KobitonCaptureModule *s = weakSelf;
+            if (!s || s->_settled) return;
+            s->_armed = YES;
+            NSLog(@"[KOBITON] KobitonCaptureModule: armed — waiting for injected frame");
         }
     );
 
@@ -2573,11 +2575,11 @@ RCT_EXPORT_METHOD(captureFrame:(double)delayMs
         dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeoutSec * NSEC_PER_SEC)),
         dispatch_get_main_queue(),
         ^{
-            if (!weakSelf->_settled) {
-                NSLog(@"[KOBITON] KobitonCaptureModule: timeout — no injected frame received");
-                [weakSelf finishWithError:@"E_TIMEOUT"
-                                 message:@"No injected frame received within timeout. Ensure the Kobiton image injection is active and try again."];
-            }
+            KobitonCaptureModule *s = weakSelf;
+            if (!s || s->_settled) return;
+            NSLog(@"[KOBITON] KobitonCaptureModule: timeout — no injected frame received");
+            [s finishWithError:@"E_TIMEOUT"
+                       message:@"No injected frame received within timeout. Ensure the Kobiton image injection is active and try again."];
         }
     );
 }
@@ -2595,7 +2597,8 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     NSLog(@"[KOBITON] KobitonCaptureModule: frame captured — converting to JPEG");
 
     CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
-    CVPixelBufferLockBaseAddress(imageBuffer, kCVPixelBufferLockFlags_ReadOnly);
+    // kCVPixelBufferLock_ReadOnly is the correct constant (not kCVPixelBufferLockFlags_ReadOnly)
+    CVPixelBufferLockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
 
     size_t width       = CVPixelBufferGetWidth(imageBuffer);
     size_t height      = CVPixelBufferGetHeight(imageBuffer);
@@ -2611,7 +2614,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     CGImageRef cgImage = CGBitmapContextCreateImage(context);
     CGContextRelease(context);
     CGColorSpaceRelease(colorSpace);
-    CVPixelBufferUnlockBaseAddress(imageBuffer, kCVPixelBufferLockFlags_ReadOnly);
+    CVPixelBufferUnlockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
 
     // Camera frames arrive in landscape; rotate to portrait so jsQR finds the QR code.
     UIImage *raw    = [UIImage imageWithCGImage:cgImage scale:1.0
