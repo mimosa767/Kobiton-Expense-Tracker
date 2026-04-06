@@ -50,22 +50,34 @@ export default function MediaGalleryScreen() {
   }, [tab]);
 
   useEffect(() => {
-    if (permission?.granted) {
-      // iOS: 1 500 ms warm-up before mounting CameraView.
-      // The Kobiton SDK installs its AVCaptureVideoDataOutput swizzle hooks
-      // asynchronously after the session starts. If CameraView mounts too early
-      // the two initialisation paths race and the app crashes on first open.
-      // 750 ms was insufficient on the iPhone 12 Pro Max test device — first
-      // click reliably crashed. 1 500 ms gives the SDK enough time to settle.
-      // Android doesn't need this guard (CameraView uses Camera2/CameraX which
-      // the Kobiton camera2.aar wraps at a lower level).
+    // ── WHY [permission?.granted, tab] and not just [permission?.granted] ──────
+    //
+    // BUG (old behaviour):
+    //   permission.granted is already true on a Kobiton session (pre-granted).
+    //   The effect fired once on app load, the 1 500 ms timer fired, set
+    //   cameraVisible=true — but the user was still on the Gallery tab, so the
+    //   CameraView never rendered.  Later, after biometric login + receipt
+    //   attachment (~30 s), the user tapped QR Scanner.  tab changed to 'qr',
+    //   the condition `cameraVisible===true` was already met, so CameraView
+    //   mounted INSTANTLY with no warm-up → raced with Kobiton's swizzle hooks
+    //   → crash on first click every time.
+    //
+    // FIX:
+    //   Always reset cameraVisible=false at the top of this effect.
+    //   Because `tab` is in the dependency array, the effect re-runs on every
+    //   QR-tab visit.  The 1 500 ms timer then fires fresh each time the user
+    //   taps QR Scanner, regardless of how long ago permission was granted.
+    setCameraVisible(false);
+    if (permission?.granted && tab === 'qr') {
+      // iOS: 1 500 ms warm-up on EVERY QR tab visit.
+      // Gives Kobiton's AVCaptureVideoDataOutput swizzle hooks time to install
+      // before CameraView creates its own AVCaptureSession.
+      // Android: 350 ms is sufficient (camera2.aar wraps at a lower level).
       const delay = Platform.OS === 'ios' ? 1500 : 350;
       const t = setTimeout(() => setCameraVisible(true), delay);
       return () => clearTimeout(t);
-    } else {
-      setCameraVisible(false);
     }
-  }, [permission?.granted]);
+  }, [permission?.granted, tab]);
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
