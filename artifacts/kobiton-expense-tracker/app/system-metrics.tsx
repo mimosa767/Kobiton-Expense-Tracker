@@ -12,7 +12,7 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Radius, Shadow, Spacing, Typography } from '@/src/constants/theme';
 
-type LoadLevel = 'light' | 'medium' | 'heavy';
+type LoadLevel = 'light' | 'medium' | 'heavy' | 'extreme';
 
 const LOAD_CONFIG: Record<LoadLevel, {
   label: string;
@@ -22,9 +22,10 @@ const LOAD_CONFIG: Record<LoadLevel, {
   cpuDesc: string;
   memDesc: string;
 }> = {
-  light:  { label: 'Light',  color: Colors.accent,   concurrency: 1, memoryMB: 30,  cpuDesc: '1 thread',  memDesc: '30 MB' },
-  medium: { label: 'Medium', color: Colors.warning,  concurrency: 2, memoryMB: 100, cpuDesc: '2 threads', memDesc: '100 MB' },
-  heavy:  { label: 'Heavy',  color: Colors.error,    concurrency: 4, memoryMB: 250, cpuDesc: '4 threads', memDesc: '250 MB' },
+  light:   { label: 'Light',   color: Colors.accent,   concurrency: 1, memoryMB: 30,  cpuDesc: '1 thread',  memDesc: '30 MB' },
+  medium:  { label: 'Medium',  color: Colors.warning,  concurrency: 2, memoryMB: 100, cpuDesc: '2 threads', memDesc: '100 MB' },
+  heavy:   { label: 'Heavy',   color: Colors.error,    concurrency: 4, memoryMB: 250, cpuDesc: '4 threads', memDesc: '250 MB' },
+  extreme: { label: 'Extreme', color: '#7C3AED',        concurrency: 8, memoryMB: 500, cpuDesc: '8 threads', memDesc: '500 MB' },
 };
 
 // ─── Real CPU load ────────────────────────────────────────────────────────────
@@ -52,22 +53,51 @@ function stopCPULoad() {
 }
 
 // ─── Real memory pressure ─────────────────────────────────────────────────────
-// Allocates filled Float64Arrays so the OS actually commits the pages.
+// Allocates filled Float64Arrays so the OS commits the pages, then continuously
+// reads and writes random positions across all blocks so:
+//   1. The Hermes / JavaScriptCore GC cannot reclaim the pages (they have live refs
+//      AND are being accessed on every thrash tick).
+//   2. The OS cannot silently page them out — recent writes keep them hot in RAM.
+//   3. The Kobiton memory graph rises and stays elevated for the full session.
+//
+// Without the thrash loop, GC marking + the OS pager can quietly reclaim cold
+// pages even though _memBlocks still holds the array references, which is why
+// the memory metric appeared flat in practice.
 let _memBlocks: Float64Array[] = [];
+let _memRunning = false;
 
 function allocateMemory(mb: number) {
   releaseMemory();
-  const floatsPerMB = 131072; // 8 bytes × 131 072 = 1 MiB
+  const floatsPerMB = 131072; // 8 bytes × 131,072 = 1 MiB
   const chunkMB = 10;
   const chunks = Math.ceil(mb / chunkMB);
   for (let i = 0; i < chunks; i++) {
-    const block = new Float64Array(Math.min(chunkMB, mb - i * chunkMB) * floatsPerMB);
-    block.fill(Math.random() * Math.PI); // write every byte so pages are committed
+    const chunkSize = Math.min(chunkMB, mb - i * chunkMB);
+    const block = new Float64Array(chunkSize * floatsPerMB);
+    block.fill(Math.random() * Math.PI); // initial commit — write every byte
     _memBlocks.push(block);
   }
 }
 
+function startMemoryThrash() {
+  _memRunning = true;
+  (function thrash() {
+    if (!_memRunning || _memBlocks.length === 0) return;
+    // Spend ~8 ms writing to random positions across all allocated blocks.
+    // This keeps pages hot in RAM and forces the OS to account for them.
+    const deadline = performance.now() + 8;
+    while (performance.now() < deadline) {
+      const blockIdx = (_memBlocks.length * Math.random()) | 0;
+      const block = _memBlocks[blockIdx];
+      const pos = (block.length * Math.random()) | 0;
+      block[pos] = Math.random(); // dirty the page
+    }
+    setTimeout(thrash, 40); // re-thrash every 40 ms
+  })();
+}
+
 function releaseMemory() {
+  _memRunning = false;
   _memBlocks = [];
 }
 
@@ -91,6 +121,7 @@ export default function SystemMetricsScreen() {
   function startLoad() {
     const cfg = LOAD_CONFIG[loadLevel];
     allocateMemory(cfg.memoryMB);
+    startMemoryThrash();
     startCPULoad(cfg.concurrency);
     startRef.current = Date.now();
     setElapsed(0);
@@ -168,10 +199,10 @@ export default function SystemMetricsScreen() {
           )}
         </View>
 
-        {/* Level selector */}
+        {/* Level selector — 2×2 grid */}
         <Text style={styles.sectionLabel}>STRESS LEVEL</Text>
-        <View style={styles.levelsRow}>
-          {(['light', 'medium', 'heavy'] as LoadLevel[]).map((level) => {
+        <View style={styles.levelsGrid}>
+          {(['light', 'medium', 'heavy', 'extreme'] as LoadLevel[]).map((level) => {
             const lc = LOAD_CONFIG[level];
             const selected = loadLevel === level;
             return (
@@ -336,9 +367,13 @@ const styles = StyleSheet.create({
     marginBottom: -4,
   },
 
-  levelsRow: { flexDirection: 'row', gap: Spacing.sm },
+  levelsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
   levelBtn: {
-    flex: 1,
+    width: '47.5%',
     paddingVertical: 12,
     paddingHorizontal: 6,
     borderRadius: Radius.md,
