@@ -2314,16 +2314,6 @@ function withKobitonIosEmbedFrameworks(config, options) {
 const withKobitonSDK = (config, options = {}) => {
   console.log('[withKobitonSDK v5.4.0] EXECUTING — options:', JSON.stringify(options));
 
-  // Prevent @react-native-community/slider from compiling on iOS.
-  // Root cause: datetimepicker lists react-native-windows as an optional peer dep.
-  // EAS pnpm install auto-installs optional peers, pulling in react-native-windows
-  // which depends on slider@5.1.2. Slider ships RNCSliderComponentView.mm which
-  // #imports a Codegen-generated header that only exists when slider is used in JS.
-  // Since this app never imports slider, the header is absent → fatal build error.
-  // The pnpm-workspace.yaml override "@react-native-community/slider": "-" prevents
-  // installation. This plugin hook is belt-and-suspenders for any EAS edge-case.
-  config = withSliderFix(config);
-
   config = withKobitonPod(config);
   config = withKobitonInfoPlist(config, options);
   config = withKobitonAppDelegate(config, options);
