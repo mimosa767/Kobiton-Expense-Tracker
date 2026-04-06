@@ -2148,6 +2148,12 @@ function withKobitonIosBiometricNativeModule(config, options) {
 // ensures the Kobiton framework intercepts ALL evaluatePolicy: calls.
 #import <KobitonLAContext/KobitonLAContext.h>
 
+// Explicit forward declaration: Xcode 26 / iOS SDK 26's stricter clang modules
+// system does not expose RCTRegisterModule at the C level even after importing
+// RCTBridgeModule.h via @import. Adding extern void satisfies the declaration
+// requirement without changing any runtime behaviour.
+extern void RCTRegisterModule(Class);
+
 @interface KobitonBiometricModule : NSObject <RCTBridgeModule>
 @end
 
