@@ -154,6 +154,15 @@ overrides:
   "@expo/ngrok-bin>@expo/ngrok-bin-sunos-x64": "-"
   "@expo/ngrok-bin>@expo/ngrok-bin-win32-ia32": "-"
   "@expo/ngrok-bin>@expo/ngrok-bin-win32-x64": "-"
+  # @react-native-community/datetimepicker lists react-native-windows as an optional peer dep.
+  # EAS pnpm install auto-installs optional peers (its pnpm version may ignore our .npmrc
+  # auto-install-peers=false setting). react-native-windows transitively depends on
+  # @react-native-community/slider@5.1.2, which ships RNCSliderComponentView.mm — a Fabric
+  # component view that #imports RNCSliderComponentDescriptor.h. Codegen only generates that
+  # header when slider is actively imported in JS; since this app never imports slider,
+  # the header is absent and xcodebuild fails with "file not found". Excluding slider here
+  # prevents it from entering node_modules regardless of which package tries to pull it in.
+  "@react-native-community/slider": "-"
   # drizzle-kit uses esbuild internally on an older version that's vulnerable, this overrides it
   "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0"
   esbuild: "0.27.3"

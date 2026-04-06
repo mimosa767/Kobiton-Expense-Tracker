@@ -147,6 +147,7 @@ overrides:
   '@expo/ngrok-bin>@expo/ngrok-bin-sunos-x64': '-'
   '@expo/ngrok-bin>@expo/ngrok-bin-win32-ia32': '-'
   '@expo/ngrok-bin>@expo/ngrok-bin-win32-x64': '-'
+  '@react-native-community/slider': '-'
   '@esbuild-kit/esm-loader': npm:tsx@^4.21.0
   esbuild: 0.27.3
 

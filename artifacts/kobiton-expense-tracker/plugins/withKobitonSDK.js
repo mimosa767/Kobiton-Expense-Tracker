@@ -237,10 +237,10 @@ function withSliderFix(config) {
       }
 
       let podfile = fs.readFileSync(podfilePath, 'utf8');
-      const HOOK_MARKER = '# [KobitonFix v3] Definitive slider Fabric fix';
+      const HOOK_MARKER = '# [KobitonFix v4] Definitive slider Fabric fix';
 
       if (podfile.includes(HOOK_MARKER)) {
-        console.log('[KobitonSDK] ✓ Slider v3 Podfile hook already present');
+        console.log('[KobitonSDK] ✓ Slider v4 Podfile hook already present');
         return mod;
       }
 
@@ -248,6 +248,7 @@ function withSliderFix(config) {
       const OLD_MARKERS = [
         '# [KobitonFix] react-native-slider: exclude RNCSliderComponentView.mm',
         '# [KobitonFix-v2] RNCSliderComponentView.mm direct-overwrite',
+        '# [KobitonFix v3] Definitive slider Fabric fix',
       ];
       for (const oldMarker of OLD_MARKERS) {
         if (podfile.includes(oldMarker)) {
@@ -283,26 +284,36 @@ function withSliderFix(config) {
       //     EAS Mac), the rescue logs a warning and continues — Strategy A already fixed it.
       const hook = `
 ${HOOK_MARKER}
-# [KobitonFix v3] Definitive slider Fabric fix — see withKobitonSDK.js for full analysis.
-# Two independent strategies, each wrapped in rescue so neither can crash the other.
+# [KobitonFix v4] Definitive slider Fabric fix — see withKobitonSDK.js for full analysis.
+# Three independent strategies, each in its own rescue block. Belt-and-suspenders.
 #
-# Strategy A: Remove RNCSliderComponentView.mm from the Xcode build phase.
-# Strategy B: Overwrite the file with an empty stub (chmod 0644 first).
+# Strategy A+C: Xcode project manipulation (combined, one project.save).
+#   A — Remove RNCSliderComponentView.mm from the Pods compile-sources build phase.
+#   C — Set EXCLUDED_SOURCE_FILE_NAMES = RNCSliderComponentView.mm on all configs.
+# Strategy B: Overwrite the file on disk with an empty stub (chmod 0644 first).
+#
+# Root cause (confirmed): datetimepicker@8.4.4 lists react-native-windows as an
+# optional peer dep. EAS pnpm may auto-install optional peers (ignoring .npmrc),
+# pulling in react-native-windows which depends on slider@5.1.2. Slider ships
+# RNCSliderComponentView.mm which #imports a Codegen header that only exists when
+# slider is used in JS — this app never imports slider → header absent → build fails.
+# pnpm-workspace.yaml override "@react-native-community/slider": "-" prevents
+# installation; this hook is belt-and-suspenders for any EAS pnpm edge-case.
 #
 # Refs: https://github.com/callstack/react-native-slider/issues/744
 
 post_install do |installer|
 
-  # ── Strategy A: Remove from Xcode build phase ──────────────────────────────
-  # Iterates over a SNAPSHOT (to_a) so we're not modifying the list while reading.
-  # Uses remove_from_project which removes the PBXBuildFile from the project AND
-  # de-lists it from the build phase's files array in one call.
-  # project.save commits the change before Strategy B can raise any exception.
+  # ── Strategy A+C: Xcode project manipulation (combined, one save) ──────────
   begin
     removed_count = 0
+    build_settings_changed = false
+
     installer.pods_project.targets.each do |target|
       next unless target.name == 'react-native-slider'
-      Pod::UI.puts "[KobitonSDK] Strategy A — react-native-slider target found"
+      Pod::UI.puts "[KobitonSDK] Strategy A+C — react-native-slider target found"
+
+      # Strategy A: remove RNCSliderComponentView.mm from the compile-sources phase
       snapshot = target.source_build_phase.files.to_a
       Pod::UI.puts "[KobitonSDK] Strategy A — compile sources count: #{snapshot.length}"
       snapshot.each do |build_file|
@@ -312,15 +323,27 @@ post_install do |installer|
         build_file.remove_from_project
         removed_count += 1
       end
+
+      # Strategy C: set EXCLUDED_SOURCE_FILE_NAMES for every build configuration
+      target.build_configurations.each do |cfg|
+        existing = cfg.build_settings['EXCLUDED_SOURCE_FILE_NAMES'].to_s
+        unless existing.include?('RNCSliderComponentView')
+          new_val = existing.empty? ? 'RNCSliderComponentView.mm' : "#{existing} RNCSliderComponentView.mm"
+          cfg.build_settings['EXCLUDED_SOURCE_FILE_NAMES'] = new_val
+          build_settings_changed = true
+        end
+      end
     end
-    if removed_count > 0
+
+    if removed_count > 0 || build_settings_changed
       installer.pods_project.save
-      Pod::UI.puts "[KobitonSDK] \u2713 Strategy A — saved project, removed #{removed_count} file(s)"
+      Pod::UI.puts "[KobitonSDK] \u2713 Strategy A — removed #{removed_count} file(s) from build phase" if removed_count > 0
+      Pod::UI.puts "[KobitonSDK] \u2713 Strategy C — EXCLUDED_SOURCE_FILE_NAMES set on all configs" if build_settings_changed
     else
-      Pod::UI.puts "[KobitonSDK] \u2139 Strategy A — no RNCSliderComponentView in build phase (already clean)"
+      Pod::UI.puts "[KobitonSDK] \u2139 Strategy A+C — react-native-slider not in Pods project (slider absent \u2714)"
     end
   rescue => e
-    Pod::UI.warn "[KobitonSDK] \u2717 Strategy A failed: #{e.class}: #{e.message}"
+    Pod::UI.warn "[KobitonSDK] \u2717 Strategy A+C failed: #{e.class}: #{e.message}"
     Pod::UI.warn "[KobitonSDK]   #{(e.backtrace || []).first(3).join(' | ')}"
   end
 
@@ -2289,11 +2312,17 @@ function withKobitonIosEmbedFrameworks(config, options) {
 // ─── Main plugin ─────────────────────────────────────────────────────────────
 
 const withKobitonSDK = (config, options = {}) => {
-  console.log('[withKobitonSDK v5.2.0] EXECUTING — options:', JSON.stringify(options));
+  console.log('[withKobitonSDK v5.4.0] EXECUTING — options:', JSON.stringify(options));
 
-  // NOTE: withSliderFix was removed. @react-native-community/slider is no longer
-  // installed (removed explicit dep + pnpm.overrides). autolinking.exclude in
-  // app.json provides belt-and-suspenders protection. No slider → no Podfile hook needed.
+  // Prevent @react-native-community/slider from compiling on iOS.
+  // Root cause: datetimepicker lists react-native-windows as an optional peer dep.
+  // EAS pnpm install auto-installs optional peers, pulling in react-native-windows
+  // which depends on slider@5.1.2. Slider ships RNCSliderComponentView.mm which
+  // #imports a Codegen-generated header that only exists when slider is used in JS.
+  // Since this app never imports slider, the header is absent → fatal build error.
+  // The pnpm-workspace.yaml override "@react-native-community/slider": "-" prevents
+  // installation. This plugin hook is belt-and-suspenders for any EAS edge-case.
+  config = withSliderFix(config);
 
   config = withKobitonPod(config);
   config = withKobitonInfoPlist(config, options);
@@ -2352,4 +2381,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '5.3.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '5.4.0');
