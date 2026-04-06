@@ -378,11 +378,11 @@ export default function AddExpenseScreen() {
   const { control, handleSubmit, watch, setValue, reset, formState: { errors, isDirty } } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
-      head: '',
-      amount: '0.00',
-      currency: '',
+      head: 'Uber',
+      amount: '50',
+      currency: 'USD-$',
       date: new Date(),
-      category: '',
+      category: 'Business',
       recurring: false,
       notes: '',
     },
