@@ -207,7 +207,24 @@ function withSliderFix(config) {
     },
   ]);
 
-  // ── Layer 2: Podfile post_install hook ────────────────────────────────────
+  // ── Layer 2: Podfile post_install hook — direct file overwrite ──────────
+  //
+  // WHY FILE OVERWRITE (not EXCLUDED_SOURCE_FILE_NAMES):
+  //   EXCLUDED_SOURCE_FILE_NAMES has been tried and is silently ignored in
+  //   CocoaPods-generated Xcode projects for pod targets. Direct file overwrite
+  //   is guaranteed: the Ruby post_install runs after ALL pnpm/pod installs and
+  //   before xcodebuild. Nothing touches node_modules after this point.
+  //
+  // WHY RUBY (not JS Layer 1):
+  //   Layer 1 runs during expo prebuild. EAS re-runs pnpm install after prebuild
+  //   as a validation step, restoring the original slider file. Ruby post_install
+  //   runs AFTER that final pnpm install, so the stub survives to compile time.
+  //
+  // PATH LOGIC:
+  //   Podfile lives at <projectRoot>/ios/Podfile.
+  //   __dir__ in Ruby = <projectRoot>/ios/
+  //   ../../../node_modules/.pnpm = <workspaceRoot>/node_modules/.pnpm
+  //   (EAS path confirmed: /Users/expo/workingdir/build/node_modules/.pnpm/)
   config = withDangerousMod(config, [
     'ios',
     async (mod) => {
@@ -215,35 +232,83 @@ function withSliderFix(config) {
       const podfilePath = path.join(projectRoot, 'ios', 'Podfile');
 
       if (!fs.existsSync(podfilePath)) {
-        console.log('[KobitonSDK] ℹ Podfile not found — skipping slider post_install hook (prebuild may not have run yet)');
+        console.log('[KobitonSDK] ℹ Podfile not found — skipping slider post_install hook');
         return mod;
       }
 
       let podfile = fs.readFileSync(podfilePath, 'utf8');
-      const HOOK_MARKER = '# [KobitonFix] react-native-slider: exclude RNCSliderComponentView.mm';
+      const HOOK_MARKER = '# [KobitonFix-v2] RNCSliderComponentView.mm direct-overwrite';
 
       if (podfile.includes(HOOK_MARKER)) {
-        console.log('[KobitonSDK] ✓ Slider Podfile hook already present');
+        console.log('[KobitonSDK] ✓ Slider Podfile overwrite hook already present');
         return mod;
       }
 
-      // Append a new post_install block — Ruby CocoaPods executes all post_install
-      // blocks in order, so appending a second one is safe.
+      // Remove any old Layer 2 hook (EXCLUDED_SOURCE_FILE_NAMES approach) if present
+      const OLD_MARKER = '# [KobitonFix] react-native-slider: exclude RNCSliderComponentView.mm';
+      if (podfile.includes(OLD_MARKER)) {
+        const oldHookStart = podfile.indexOf(OLD_MARKER);
+        // Find the end of the old post_install block
+        const oldHookEnd = podfile.indexOf('\nend\n', oldHookStart);
+        if (oldHookEnd !== -1) {
+          podfile = podfile.slice(0, oldHookStart) + podfile.slice(oldHookEnd + 5);
+          console.log('[KobitonSDK] ✓ Removed old EXCLUDED_SOURCE_FILE_NAMES hook');
+        }
+      }
+
+      // CocoaPods runs ALL post_install blocks in declaration order.
+      // We append a second post_install that overwrites RNCSliderComponentView.mm
+      // with a harmless stub immediately after pod install, before xcodebuild.
       const hook = `
 ${HOOK_MARKER}
-# RNCSliderComponentView.mm requires Codegen headers not generated when slider
-# has no JS imports. EXCLUDED_SOURCE_FILE_NAMES tells Xcode to skip the file.
+# Overwrites RNCSliderComponentView.mm with a stub after pod install and before
+# xcodebuild. RNCSliderComponentDescriptor.h (imported inside #ifdef RCT_NEW_ARCH_ENABLED)
+# is not generated for projects that never import slider in JS. Overwriting the
+# file prevents the fatal "file not found" compile error.
 post_install do |installer|
-  installer.pods_project.targets.each do |target|
-    next unless target.name == 'react-native-slider'
-    target.build_configurations.each do |config|
-      config.build_settings['EXCLUDED_SOURCE_FILE_NAMES'] = 'RNCSliderComponentView.mm'
+  stub_content = "// [KobitonFix] RNCSliderComponentView.mm stubbed by Podfile post_install.\\n" \
+                 "// RNCSliderComponentDescriptor.h is not generated for this project.\\n" \
+                 "// This file is replaced with a stub to prevent a fatal build error.\\n"
+
+  # Search for the file using multiple strategies.
+  # Strategy 1: relative to the Podfile (works for standard EAS pnpm monorepo layout)
+  #   Podfile at: <projectRoot>/ios/Podfile  ->  __dir__ = <projectRoot>/ios
+  #   ../../../node_modules = <workspaceRoot>/node_modules
+  search_bases = [
+    File.expand_path('../../../node_modules/.pnpm', __dir__),
+    File.expand_path('../../node_modules/.pnpm', __dir__),
+    File.expand_path('../node_modules/.pnpm', __dir__),
+  ]
+  # Strategy 2: hardcoded EAS absolute path confirmed in build logs
+  search_bases << '/Users/expo/workingdir/build/node_modules/.pnpm'
+
+  patched = false
+  search_bases.uniq.each do |pnpm_base|
+    next unless Dir.exist?(pnpm_base)
+    pattern = File.join(pnpm_base,
+      '@react-native-community+slider*',
+      'node_modules', '@react-native-community', 'slider',
+      'ios', 'RNCSliderComponentView.mm')
+    Dir.glob(pattern) do |slider_mm|
+      current = File.read(slider_mm) rescue nil
+      next unless current
+      if current.include?('[KobitonFix]')
+        Pod::UI.puts "[KobitonSDK] \u2713 RNCSliderComponentView.mm already stubbed: #{slider_mm}"
+      else
+        File.write(slider_mm, stub_content)
+        Pod::UI.puts "[KobitonSDK] \u2713 Stubbed RNCSliderComponentView.mm: #{slider_mm}"
+      end
+      patched = true
     end
+  end
+
+  unless patched
+    Pod::UI.puts '[KobitonSDK] \u2139 RNCSliderComponentView.mm not found in any pnpm store path'
   end
 end
 `;
       fs.writeFileSync(podfilePath, podfile + hook, 'utf8');
-      console.log('[KobitonSDK] ✓ Added slider EXCLUDED_SOURCE_FILE_NAMES post_install hook to Podfile');
+      console.log('[KobitonSDK] ✓ Added slider direct-overwrite post_install hook to Podfile');
       return mod;
     },
   ]);
@@ -2217,4 +2282,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '5.1.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '5.2.0');
