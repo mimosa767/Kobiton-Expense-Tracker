@@ -2289,11 +2289,11 @@ function withKobitonIosEmbedFrameworks(config, options) {
 // ─── Main plugin ─────────────────────────────────────────────────────────────
 
 const withKobitonSDK = (config, options = {}) => {
-  console.log('[withKobitonSDK v5.1.0] EXECUTING — options:', JSON.stringify(options));
+  console.log('[withKobitonSDK v5.2.0] EXECUTING — options:', JSON.stringify(options));
 
-  // Fix react-native-slider Fabric header error BEFORE any iOS prebuild steps.
-  // See withSliderFix comment block above for full explanation.
-  config = withSliderFix(config);
+  // NOTE: withSliderFix was removed. @react-native-community/slider is no longer
+  // installed (removed explicit dep + pnpm.overrides). autolinking.exclude in
+  // app.json provides belt-and-suspenders protection. No slider → no Podfile hook needed.
 
   config = withKobitonPod(config);
   config = withKobitonInfoPlist(config, options);
@@ -2352,4 +2352,4 @@ const withKobitonSDK = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '5.2.0');
+module.exports = createRunOncePlugin(withKobitonSDK, 'withKobitonSDK', '5.3.0');
