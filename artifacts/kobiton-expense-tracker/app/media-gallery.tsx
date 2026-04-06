@@ -89,8 +89,15 @@ export default function MediaGalleryScreen() {
    * or null if no QR code was found in the frame.
    */
   async function decodeQRFromBase64(b64: string): Promise<string | null> {
-    const raw = Buffer.from(b64, 'base64');
-    const { data, width, height } = jpeg.decode(raw, { useTArray: true });
+    // Buffer is a Node.js API that does NOT exist in Hermes (Android's JS
+    // engine). Use atob() which is available in both Hermes and JSC, then
+    // manually copy the binary string into a Uint8Array for jpeg-js.
+    const binaryStr = atob(b64);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    const { data, width, height } = jpeg.decode(bytes, { useTArray: true });
     const code = jsQR(new Uint8ClampedArray(data), width, height);
     return code ? code.data : null;
   }

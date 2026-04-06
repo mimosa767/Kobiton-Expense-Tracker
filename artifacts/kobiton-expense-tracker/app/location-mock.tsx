@@ -292,9 +292,10 @@ export default function LocationMockScreen() {
           <MaterialCommunityIcons name="information-outline" size={16} color={Colors.accent} />
           <Text style={styles.infoText}>
             <Text style={styles.infoHighlight}>Tip: </Text>
-            If coordinates appear before you inject anything, the Kobiton platform may have automatically applied a default location when the session started. Tap{' '}
-            <Text style={styles.infoHighlight}>Refresh</Text>{' '}
-            after injecting your target coordinates to see them update here.
+            Coordinates shown may reflect a location injected in a{' '}
+            <Text style={styles.infoHighlight}>previous Kobiton session</Text>
+            {' '}— injections persist on the device until overwritten. To see your current injection, set the coordinates in the Kobiton platform and tap{' '}
+            <Text style={styles.infoHighlight}>Refresh</Text>.
           </Text>
         </View>
 
