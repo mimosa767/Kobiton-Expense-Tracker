@@ -131,29 +131,54 @@ function withSliderFix(config) {
         '// EXCLUDED_SOURCE_FILE_NAMES as a secondary guard.',
       ].join('\n') + '\n';
 
-      // Candidate paths in order of likelihood:
-      //   a) pnpm virtual store from monorepo root (EAS path)
-      //   b) pnpm virtual store one level up (alternate workspace layout)
-      //   c) Symlinked path from monorepo root node_modules
-      //   d) Symlinked path from app-local node_modules
-      const candidatePaths = [
-        path.resolve(projectRoot, '../../node_modules/.pnpm/@react-native-community+slider@5.1.2/node_modules/@react-native-community/slider/ios/RNCSliderComponentView.mm'),
-        path.resolve(projectRoot, '../../../node_modules/.pnpm/@react-native-community+slider@5.1.2/node_modules/@react-native-community/slider/ios/RNCSliderComponentView.mm'),
-        path.resolve(projectRoot, '../../node_modules/@react-native-community/slider/ios/RNCSliderComponentView.mm'),
-        path.resolve(projectRoot, 'node_modules/@react-native-community/slider/ios/RNCSliderComponentView.mm'),
-      ];
+      const TARGET_FILE = path.join('@react-native-community', 'slider', 'ios', 'RNCSliderComponentView.mm');
 
-      // Also search by traversing up from projectRoot looking for the pnpm store
-      const parts = projectRoot.split(path.sep);
-      for (let i = parts.length - 1; i >= 0; i--) {
-        const candidate = path.join(
-          parts.slice(0, i + 1).join(path.sep),
-          'node_modules', '.pnpm',
-          '@react-native-community+slider@5.1.2',
-          'node_modules', '@react-native-community', 'slider', 'ios',
-          'RNCSliderComponentView.mm'
-        );
-        if (!candidatePaths.includes(candidate)) candidatePaths.push(candidate);
+      // Collect all candidate file paths. We use three strategies:
+      //
+      // Strategy A — pnpm virtual store directory SCAN:
+      //   Walk up from projectRoot and scan every node_modules/.pnpm/ directory
+      //   for entries starting with "@react-native-community+slider@" (covers any
+      //   peer-dependency suffix pnpm may append, e.g. _react-native@0.76.0).
+      //
+      // Strategy B — Symlinked node_modules:
+      //   Check node_modules/@react-native-community/slider/ios/ at each level
+      //   (the hoisted symlink path pnpm creates for direct/workspace deps).
+      //
+      // Strategy C — Fixed EAS path (exact path seen in previous build log):
+      //   Belt-and-suspenders: include the exact path from the failing build.
+
+      const candidatePaths = new Set();
+
+      // Strategy C first — exact EAS path from build log
+      candidatePaths.add(
+        path.resolve(projectRoot, '../../node_modules/.pnpm/@react-native-community+slider@5.1.2/node_modules', TARGET_FILE)
+      );
+
+      // Traverse up from projectRoot and apply both strategies at each level
+      const parts = projectRoot.replace(/\/$/, '').split(path.sep);
+      for (let depth = parts.length; depth >= 1; depth--) {
+        const base = parts.slice(0, depth).join(path.sep) || path.sep;
+        const nmDir = path.join(base, 'node_modules');
+
+        // Strategy B: symlinked hoisted path
+        candidatePaths.add(path.join(nmDir, TARGET_FILE));
+
+        // Strategy A: scan .pnpm directory for any slider entry
+        const pnpmDir = path.join(nmDir, '.pnpm');
+        try {
+          if (fs.existsSync(pnpmDir)) {
+            const entries = fs.readdirSync(pnpmDir);
+            for (const entry of entries) {
+              if (entry.startsWith('@react-native-community+slider@')) {
+                candidatePaths.add(
+                  path.join(pnpmDir, entry, 'node_modules', TARGET_FILE)
+                );
+              }
+            }
+          }
+        } catch (_) {
+          // readdirSync can fail on permission issues — ignore and continue
+        }
       }
 
       let patched = false;
@@ -175,7 +200,7 @@ function withSliderFix(config) {
       }
 
       if (!patched) {
-        console.log('[KobitonSDK] ℹ slider RNCSliderComponentView.mm not found in candidate paths — slider not installed or already absent.');
+        console.log('[KobitonSDK] ℹ RNCSliderComponentView.mm not found — slider absent from node_modules (autolinking exclusion worked or package not installed). Layer 2 Podfile hook handles any remaining risk.');
       }
 
       return mod;
