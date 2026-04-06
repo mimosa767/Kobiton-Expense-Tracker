@@ -150,18 +150,10 @@ overrides:
   '@esbuild-kit/esm-loader': npm:tsx@^4.21.0
   esbuild: 0.27.3
 
-patchedDependencies:
-  '@react-native-community/slider@5.1.2':
-    hash: 58cbbbdefca66b2444727d21c9fab07e9ea98c6d3c55f8bc02023270db115a2f
-    path: patches/@react-native-community__slider@5.1.2.patch
-
 importers:
 
   .:
     devDependencies:
-      '@react-native-community/slider':
-        specifier: 5.1.2
-        version: 5.1.2(patch_hash=58cbbbdefca66b2444727d21c9fab07e9ea98c6d3c55f8bc02023270db115a2f)
       prettier:
         specifier: ^3.8.1
         version: 3.8.1
@@ -2093,9 +2085,6 @@ packages:
         optional: true
       react-native-windows:
         optional: true
-
-  '@react-native-community/slider@5.1.2':
-    resolution: {integrity: sha512-UV/MjCyCtSjS5BQDrrGIMmCXm309xEG6XbR0Dj65kzTraJSVDxSjQS2uBUXgX+5SZUOCzCxzv3OufOZBdtQY4w==}
 
   '@react-native/assets-registry@0.81.5':
     resolution: {integrity: sha512-705B6x/5Kxm1RKRvSv0ADYWm5JOnoiQ1ufW7h8uu2E6G9Of/eE6hP/Ivw3U5jI16ERqZxiKQwk34VJbB0niX9w==}
@@ -7793,8 +7782,6 @@ snapshots:
       react-native: 0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0)
     optionalDependencies:
       expo: 54.0.33(@babel/core@7.29.0)(@expo/metro-runtime@6.1.2)(expo-router@6.0.23)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
-
-  '@react-native-community/slider@5.1.2(patch_hash=58cbbbdefca66b2444727d21c9fab07e9ea98c6d3c55f8bc02023270db115a2f)': {}
 
   '@react-native/assets-registry@0.81.5': {}
 
