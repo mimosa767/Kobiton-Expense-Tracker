@@ -29,28 +29,28 @@ const LOAD_CONFIG: Record<LoadLevel, {
 };
 
 // ─── Real CPU load ────────────────────────────────────────────────────────────
-// Each loop runs tight math then yields and immediately re-schedules.
-// • setImmediate fires before the next I/O poll (tighter than setTimeout(0))
-//   so there is less idle time between busy-work bursts on Android/Hermes.
-// • 20 ms busy window (up from 14 ms) means ~95% CPU time per loop per core.
-// • Multiple concurrent loops saturate multiple cores; the Hermes runtime
-//   maps each loop to the same OS thread but Kobiton still sees the aggregate
-//   process CPU climb because the thread never sleeps.
+// Each loop busy-spins for 10 ms then re-schedules via setTimeout(fn, 1).
+// • setTimeout goes through the timer queue so React can commit state updates
+//   (and the bridge can flush touch events) between bursts. setImmediate was
+//   replaced because React Native batches all setImmediate callbacks before
+//   bridging, which caused the UI to appear frozen on Extreme level.
+// • 10 ms busy window keeps CPU utilisation high (~90%) while leaving each
+//   round-trip slot (~1 ms) for React/native-bridge flushes.
+// • Multiple concurrent loops drive the process CPU high enough for Kobiton's
+//   System Metrics panel to show a clear spike.
 let _cpuRunning = false;
-
-// setImmediate may not exist on older Hermes builds — fall back to setTimeout.
-const _yieldFn: (cb: () => void) => void =
-  typeof setImmediate !== 'undefined'
-    ? (cb) => setImmediate(cb)
-    : (cb) => setTimeout(cb, 0);
 
 function startCPULoad(concurrency: number) {
   _cpuRunning = true;
   for (let c = 0; c < concurrency; c++) {
     (function loop(seed: number) {
       if (!_cpuRunning) return;
-      // Busy-spin for 20 ms with heavy floating-point math.
-      const deadline = performance.now() + 20;
+      // Busy-spin for 10 ms per loop. At 8 concurrent loops (Extreme) this is
+      // 80 ms combined — tight enough for Kobiton's CPU graph to spike, but
+      // short enough that React can commit state updates and process touches
+      // between rounds (setImmediate batches ALL callbacks before any render;
+      // setTimeout(fn, 1) goes through the timer queue so React flushes first).
+      const deadline = performance.now() + 10;
       let v = seed;
       while (performance.now() < deadline) {
         v = Math.sqrt(Math.abs(v) + 1.1) * Math.PI
@@ -59,7 +59,7 @@ function startCPULoad(concurrency: number) {
           + Math.cos(v * 0.7)
           + Math.atan2(v, 1.3);
       }
-      _yieldFn(() => loop(v));
+      setTimeout(() => loop(v), 1);
     })(c * 137.3);
   }
 }
@@ -89,13 +89,13 @@ let _memBlocks: Float64Array[] = [];
 let _memBlobs: Blob[] = [];
 let _memRunning = false;
 
-// Async yield helper — lets the JS event loop process touch events between
-// heavy allocation chunks so the UI never freezes.
+// Async yield helper — lets the JS event loop process touch events and React
+// state-update commits between heavy allocation chunks.
+// Always use setTimeout (not setImmediate): React Native batches all
+// setImmediate callbacks before flushing the bridge, so setImmediate yields
+// do NOT give React a chance to re-render between chunks.
 function yield_() {
-  return new Promise<void>((resolve) => {
-    if (typeof setImmediate !== 'undefined') setImmediate(resolve);
-    else setTimeout(resolve, 0);
-  });
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
 // Cap native Blob allocation at this value to prevent OOM crashes.
@@ -192,9 +192,17 @@ export default function SystemMetricsScreen() {
   async function startLoad() {
     const cfg = LOAD_CONFIG[loadLevel];
     setElapsed(0);
-    setRunning(true);              // flip UI immediately — Stop button appears
-    _memRunning = true;            // let allocateMemory know we haven't stopped
-    startCPULoad(cfg.concurrency); // start CPU load right away (no blocking)
+    setRunning(true);   // flip UI — Stop button appears
+    _memRunning = true; // let allocateMemory know we haven't stopped
+
+    // Wait for the running=true render to fully commit to the native UI before
+    // CPU loops begin. Without this pause, on Extreme (8 loops × 10 ms = 80 ms
+    // combined), the JS thread is monopolised before React can bridge the state
+    // change, making the screen look frozen and the Stop button unreachable.
+    await new Promise<void>(resolve => setTimeout(resolve, 200));
+    if (!_memRunning) return; // user tapped Stop during the warm-up window
+
+    startCPULoad(cfg.concurrency); // start CPU load after UI has updated
 
     // Async chunked allocation — yields between chunks so touch events are
     // processed. The user can tap Stop while memory is still being allocated.
