@@ -53,7 +53,7 @@ export function ExpenseProvider({ children }) {
   // Load persisted expenses on mount
   useEffect(() => {
     loadExpenses();
-  }, []);
+  }, [loadExpenses]);
 
   // Persist whenever the expenses array changes
   useEffect(() => {

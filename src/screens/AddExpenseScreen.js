@@ -269,8 +269,7 @@ export default function AddExpenseScreen() {
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>Receipt Photo</Text>
           <Text style={styles.hint}>
-            Kobiton Image Capture SDK intercepts camera/gallery calls during
-            automated testing.
+            Attach a photo of your receipt for record-keeping.
           </Text>
 
           {receiptUri ? (
