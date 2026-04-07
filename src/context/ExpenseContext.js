@@ -50,11 +50,6 @@ function expenseReducer(state, action) {
 export function ExpenseProvider({ children }) {
   const [state, dispatch] = useReducer(expenseReducer, initialState);
 
-  // Load persisted expenses on mount
-  useEffect(() => {
-    loadExpenses();
-  }, [loadExpenses]);
-
   // Persist whenever the expenses array changes
   useEffect(() => {
     saveExpenses(state.expenses).catch((err) =>
@@ -70,6 +65,11 @@ export function ExpenseProvider({ children }) {
       console.warn('Failed to load expenses:', error);
     }
   }, []);
+
+  // Load persisted expenses on mount
+  useEffect(() => {
+    loadExpenses();
+  }, [loadExpenses]);
 
   const addExpense = useCallback(async (expenseData) => {
     const newExpense = {
