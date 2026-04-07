@@ -18,3 +18,9 @@ id = "kHQSWYnCP_yOgDuHcrpGO"
 uri = "file://kobiton-expense-tracker.zip"
 type = "unspecified"
 title = "Kobiton Expense Tracker — latest source"
+
+[[outputs]]
+id = "BlzCPBcNJnsJh-1VOocUQ"
+uri = "file://artifacts/kobiton-expense-tracker/KOBITON_SDK_INTEGRATION.md"
+type = "text"
+title = "Kobiton SDK Integration Guide"
