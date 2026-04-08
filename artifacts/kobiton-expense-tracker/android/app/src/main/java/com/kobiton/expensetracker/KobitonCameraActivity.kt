@@ -205,12 +205,28 @@ class KobitonCameraActivity : AppCompatActivity() {
     }
 
     /**
-     * Capture the current preview frame via TextureView.getBitmap().
+     * Capture the current preview frame via TextureView.getBitmap(width, height).
      *
-     * IMPORTANT: getBitmap() reads from the TextureView's SurfaceTexture,
+     * IMPORTANT: getBitmap(width, height) reads from the TextureView's SurfaceTexture,
      * which is the surface Kobiton's ImageInjectionClient intercepts. This
      * means the bitmap contains the Kobiton-injected synthetic frame (e.g.
      * a QR-code image), not the real camera sensor output.
+     *
+     * WHY width/height must be specified (CAPTURE_WIDTH × CAPTURE_HEIGHT):
+     * ─────────────────────────────────────────────────────────────────────
+     * setDefaultBufferSize() configures the SurfaceTexture to receive 1280×720
+     * landscape buffers from the camera.  On a portrait phone the TextureView
+     * layout size is something like 1080×2156.  getBitmap() without arguments
+     * captures at the VIEW dimensions, which stretches the landscape 1280×720
+     * buffer ~3× vertically — making the QR code undecodeable by jsQR.
+     *
+     * getBitmap(CAPTURE_WIDTH, CAPTURE_HEIGHT) renders the TextureView GL
+     * texture into a 1280×720 bitmap, matching the buffer dimensions exactly.
+     * This preserves the injected image's aspect ratio and produces a
+     * decodeable QR code image for jsQR.
+     *
+     * Confirmed by device log: "surface ready (1080x2156)" vs
+     * "App surface: size=1280x720" — the mismatch caused the distortion.
      *
      * The bitmap is compressed to JPEG on the background thread and written
      * to the app cache directory; the URI is returned to React Native via
@@ -219,13 +235,13 @@ class KobitonCameraActivity : AppCompatActivity() {
     private fun takePhoto() {
         if (isCapturing) return
         isCapturing = true
-        Log.d(TAG, "KobitonCameraActivity: takePhoto — reading injected frame from TextureView")
+        Log.d(TAG, "KobitonCameraActivity: takePhoto — reading injected frame from TextureView at ${CAPTURE_WIDTH}x${CAPTURE_HEIGHT}")
         runOnUiThread {
             try {
-                // getBitmap() must be called on the UI thread.
-                // It reads the latest frame rendered to the TextureView —
-                // which IS the Kobiton-intercepted (injected) image.
-                val bitmap: Bitmap? = textureView.getBitmap()
+                // getBitmap(CAPTURE_WIDTH, CAPTURE_HEIGHT) must be called on the UI thread.
+                // Specifying dimensions captures at the buffer's native 1280×720 size,
+                // not the portrait view size — avoids the ~3× vertical stretch.
+                val bitmap: Bitmap? = textureView.getBitmap(CAPTURE_WIDTH, CAPTURE_HEIGHT)
                 if (bitmap == null) {
                     Log.e(TAG, "KobitonCameraActivity: textureView.getBitmap() returned null")
                     isCapturing = false
