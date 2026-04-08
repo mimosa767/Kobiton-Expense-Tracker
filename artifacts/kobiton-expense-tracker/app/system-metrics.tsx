@@ -22,22 +22,33 @@ const LOAD_CONFIG: Record<LoadLevel, {
   cpuDesc: string;
   memDesc: string;
 }> = {
-  light:   { label: 'Light',   color: Colors.accent,   concurrency: 1, memoryMB: 30,  cpuDesc: '1 thread',  memDesc: '30 MB' },
-  medium:  { label: 'Medium',  color: Colors.warning,  concurrency: 2, memoryMB: 100, cpuDesc: '2 threads', memDesc: '100 MB' },
-  heavy:   { label: 'Heavy',   color: Colors.error,    concurrency: 4, memoryMB: 250, cpuDesc: '4 threads', memDesc: '250 MB' },
-  extreme: { label: 'Extreme', color: '#7C3AED',        concurrency: 8, memoryMB: 500, cpuDesc: '8 threads', memDesc: '500 MB' },
+  light:   { label: 'Light',   color: Colors.accent,   concurrency: 1, memoryMB: 30,  cpuDesc: '1 loop',  memDesc: '30 MB' },
+  medium:  { label: 'Medium',  color: Colors.warning,  concurrency: 2, memoryMB: 100, cpuDesc: '2 loops', memDesc: '100 MB' },
+  heavy:   { label: 'Heavy',   color: Colors.error,    concurrency: 4, memoryMB: 250, cpuDesc: '4 loops', memDesc: '250 MB' },
+  extreme: { label: 'Extreme', color: '#7C3AED',        concurrency: 6, memoryMB: 400, cpuDesc: '6 loops', memDesc: '400 MB' },
 };
 
-// ─── Real CPU load ────────────────────────────────────────────────────────────
-// Each loop busy-spins for 10 ms then re-schedules via setTimeout(fn, 1).
-// • setTimeout goes through the timer queue so React can commit state updates
-//   (and the bridge can flush touch events) between bursts. setImmediate was
-//   replaced because React Native batches all setImmediate callbacks before
-//   bridging, which caused the UI to appear frozen on Extreme level.
-// • 10 ms busy window keeps CPU utilisation high (~90%) while leaving each
-//   round-trip slot (~1 ms) for React/native-bridge flushes.
-// • Multiple concurrent loops drive the process CPU high enough for Kobiton's
-//   System Metrics panel to show a clear spike.
+// ─── Monotonic clock ──────────────────────────────────────────────────────────
+// performance.now() is not guaranteed on all RN/Hermes versions — fall back
+// to Date.now() which is always available and has 1 ms resolution.
+const monoNow: () => number =
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? () => performance.now()
+    : () => Date.now();
+
+// ─── CPU load ─────────────────────────────────────────────────────────────────
+// Each loop busy-spins for BURST_MS milliseconds then re-schedules itself via
+// setTimeout(fn, 0).  All loops share the single JavaScript/Hermes thread —
+// they interleave as fast as the JS engine allows.
+//
+// Kobiton's system metrics panel samples the OS-level process CPU.  To make
+// the spike visible on a multi-core device the JS thread needs to stay busy
+// as continuously as possible, so the burst window is set large (40 ms) and
+// the yield delay is 0 ms.  With N concurrent loops, each bursting 40 ms:
+//   effective JS-thread occupancy ≈ N×40 / (N×40 + 0) = ~100 % of one core
+// On a 6-core device this appears as ~16 % total CPU per loop (1÷6).
+// Six loops therefore show ~96 % total CPU — clearly visible in Kobiton.
+const BURST_MS = 40;
 let _cpuRunning = false;
 
 function startCPULoad(concurrency: number) {
@@ -45,22 +56,19 @@ function startCPULoad(concurrency: number) {
   for (let c = 0; c < concurrency; c++) {
     (function loop(seed: number) {
       if (!_cpuRunning) return;
-      // Busy-spin for 10 ms per loop. At 8 concurrent loops (Extreme) this is
-      // 80 ms combined — tight enough for Kobiton's CPU graph to spike, but
-      // short enough that React can commit state updates and process touches
-      // between rounds (setImmediate batches ALL callbacks before any render;
-      // setTimeout(fn, 1) goes through the timer queue so React flushes first).
-      const deadline = performance.now() + 10;
+      const end = monoNow() + BURST_MS;
       let v = seed;
-      while (performance.now() < deadline) {
+      while (monoNow() < end) {
         v = Math.sqrt(Math.abs(v) + 1.1) * Math.PI
           + Math.log(Math.abs(v) + 2)
           + Math.sin(v)
           + Math.cos(v * 0.7)
           + Math.atan2(v, 1.3);
       }
-      setTimeout(() => loop(v), 1);
-    })(c * 137.3);
+      // setTimeout(fn, 0) — yield to the event loop so React can flush state
+      // updates and touch events, then immediately reschedule.
+      setTimeout(() => loop(v), 0);
+    })(c * 137.3 + 1);
   }
 }
 
@@ -68,115 +76,88 @@ function stopCPULoad() {
   _cpuRunning = false;
 }
 
-// ─── Real memory pressure ─────────────────────────────────────────────────────
-// Strategy: two-layer allocation so memory is visible in Kobiton's OS-level
-// process metrics on both iOS and Android.
+// ─── Memory pressure ──────────────────────────────────────────────────────────
+// Strategy: large Uint8Array blocks retained in a global array.
 //
-// Layer 1 — JS Float64Arrays (Hermes / JSC heap)
-//   Keeps the JS engine itself under heap pressure. Without a thrash loop the
-//   GC marks cold pages as collectable so we continuously dirty them.
+// On Hermes (Android), TypedArrays are backed by JNI DirectByteBuffers or
+// ART primitive arrays — both contribute to the process RSS that Kobiton's
+// system metrics graph tracks.
 //
-// Layer 2 — Blob objects (native byte buffers)
-//   In React Native, Blob data is backed by:
-//     iOS  → NSData — counted directly in the process's RSS / dirty memory
-//     Android → byte[] on the Java heap — visible in the native process RSS
-//   Because these are OS-level allocations (not just JS heap), Kobiton's
-//   system memory graph rises as soon as the Blobs are created.
-//   Float64Arrays alone were invisible in the Kobiton dashboard because the
-//   Hermes GC can reclaim or compact them without touching the OS page tables.
+// Every page (4 096 bytes) is written with 0xFF at least once so the OS must
+// commit physical pages and the GC cannot reclaim them as zero-pages.
+//
+// A continuous thrash loop writes random positions across all blocks every
+// THRASH_INTERVAL_MS to keep pages hot (prevent the kernel from swapping or
+// marking them as cold / zRAM-compressed on Android).
 
-let _memBlocks: Float64Array[] = [];
-let _memBlobs: Blob[] = [];
+const BYTES_PER_MB = 1024 * 1024;
+const PAGE_SIZE    = 4096;
+const THRASH_INTERVAL_MS = 20; // re-dirty pages every 20 ms
+
+let _memBlocks: Uint8Array[] = [];
+let _thrashTimer: ReturnType<typeof setInterval> | null = null;
 let _memRunning = false;
 
-// Async yield helper — lets the JS event loop process touch events and React
-// state-update commits between heavy allocation chunks.
-// Always use setTimeout (not setImmediate): React Native batches all
-// setImmediate callbacks before flushing the bridge, so setImmediate yields
-// do NOT give React a chance to re-render between chunks.
 function yield_() {
   return new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
-// Cap native Blob allocation at this value to prevent OOM crashes.
-// Float64Arrays also contribute to memory pressure via the thrash loop.
-const MAX_BLOB_MB = 200;
-
 async function allocateMemory(mb: number): Promise<void> {
   releaseMemory();
+  _memRunning = true;
 
-  // --- Layer 1: JS heap pressure — Float64Array chunks ---
-  // Each chunk is committed synchronously but we yield between chunks so
-  // the UI thread stays responsive.
-  const floatsPerMB = 131072; // 8 bytes × 131,072 = 1 MiB
-  const jsChunkMB = 10;
-  const jsChunks = Math.ceil(mb / jsChunkMB);
-  for (let i = 0; i < jsChunks; i++) {
-    if (!_memRunning) return; // bail if stopped mid-allocation
-    const chunkSize = Math.min(jsChunkMB, mb - i * jsChunkMB);
-    const block = new Float64Array(chunkSize * floatsPerMB);
-    block.fill(Math.random() * Math.PI); // initial write — commits all pages
-    _memBlocks.push(block);
-    await yield_(); // release event loop between each 10 MB chunk
-  }
+  const CHUNK_MB = 10;
+  const chunks   = Math.ceil(mb / CHUNK_MB);
 
-  // --- Layer 2: Native byte-buffer Blobs (OS RSS visible to Kobiton) ---
-  // Blob in React Native is backed by NSData (iOS) / byte[] (Android) —
-  // actual native process memory that Kobiton's system memory graph tracks.
-  // We cap at MAX_BLOB_MB and yield between each Blob creation to avoid
-  // blocking the JS thread and causing the "froze / can't press back" issue.
-  const blobMB = Math.min(mb, MAX_BLOB_MB);
-  const blobChunkMB = 5;
-  const blobCount = Math.ceil(blobMB / blobChunkMB);
-  const seedSize = blobChunkMB * 1024 * 1024;
-  const seed = new Uint8Array(seedSize);
-  // Write a non-zero pattern so the OS must commit the physical pages.
-  for (let i = 0; i < seed.length; i += 4096) seed[i] = 0xff;
-  for (let b = 0; b < blobCount; b++) {
-    if (!_memRunning) return; // bail if stopped mid-allocation
+  for (let i = 0; i < chunks; i++) {
+    if (!_memRunning) return;
+    const chunkMB  = Math.min(CHUNK_MB, mb - i * CHUNK_MB);
+    const byteSize = chunkMB * BYTES_PER_MB;
     try {
-      // Copy seed bytes into a fresh ArrayBuffer for each Blob so the
-      // buffer is not detached / transferred on the first call.
-      const buf = seed.buffer.slice(0);
-      _memBlobs.push(new Blob([buf]));
+      const block = new Uint8Array(byteSize);
+      // Touch every page to force OS physical-page commit.
+      for (let p = 0; p < byteSize; p += PAGE_SIZE) {
+        block[p] = 0xff;
+      }
+      _memBlocks.push(block);
     } catch (_) {
-      break; // device OOM guard — stop rather than crash
+      // Device OOM guard — stop allocating rather than crash.
+      break;
     }
-    await yield_(); // release event loop between each 5 MB Blob
+    await yield_();
   }
+
+  if (!_memRunning) return;
+  startMemoryThrash();
 }
 
 function startMemoryThrash() {
-  _memRunning = true;
-  (function thrash() {
+  if (_thrashTimer !== null) clearInterval(_thrashTimer);
+  _thrashTimer = setInterval(() => {
     if (!_memRunning || _memBlocks.length === 0) return;
-    // Spend ~8 ms writing to random positions across all JS Float64Array blocks.
-    // This keeps JS pages hot in RAM so the GC does not reclaim them.
-    const deadline = performance.now() + 8;
-    while (performance.now() < deadline) {
-      const blockIdx = (_memBlocks.length * Math.random()) | 0;
-      const block = _memBlocks[blockIdx];
-      const pos = (block.length * Math.random()) | 0;
-      block[pos] = Math.random(); // dirty the page
+    // Dirty a random byte in each block to keep all pages warm in RAM.
+    for (let b = 0; b < _memBlocks.length; b++) {
+      const block = _memBlocks[b];
+      const pos   = ((block.length - 1) * Math.random()) | 0;
+      block[pos]  = (block[pos] + 1) & 0xff;
     }
-    setTimeout(thrash, 40); // re-thrash every 40 ms
-  })();
+  }, THRASH_INTERVAL_MS);
 }
 
 function releaseMemory() {
   _memRunning = false;
+  if (_thrashTimer !== null) { clearInterval(_thrashTimer); _thrashTimer = null; }
   _memBlocks = [];
-  _memBlobs = []; // drops all Blob references → native buffers freed by GC
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function SystemMetricsScreen() {
   const insets = useSafeAreaInsets();
   const [loadLevel, setLoadLevel] = useState<LoadLevel>('medium');
-  const [running, setRunning] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startRef = useRef(0);
+  const [running, setRunning]     = useState(false);
+  const [elapsed, setElapsed]     = useState(0);
+  const timerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startRef  = useRef(0);
 
   useEffect(() => {
     return () => {
@@ -186,34 +167,25 @@ export default function SystemMetricsScreen() {
     };
   }, []);
 
-  // startLoad is async so it can await the chunked memory allocation without
-  // blocking the JS thread. The UI flips to "running" immediately so the user
-  // can see the state change and press Stop at any time — even mid-allocation.
   async function startLoad() {
     const cfg = LOAD_CONFIG[loadLevel];
     setElapsed(0);
-    setRunning(true);   // flip UI — Stop button appears
-    _memRunning = true; // let allocateMemory know we haven't stopped
+    setRunning(true);
+    _memRunning = true;
 
-    // Wait for the running=true render to fully commit to the native UI before
-    // CPU loops begin. Without this pause, on Extreme (8 loops × 10 ms = 80 ms
-    // combined), the JS thread is monopolised before React can bridge the state
-    // change, making the screen look frozen and the Stop button unreachable.
+    // Give React 200 ms to commit the running=true state change to the native
+    // UI so the Stop button becomes tappable before CPU loops start.
     await new Promise<void>(resolve => setTimeout(resolve, 200));
-    if (!_memRunning) return; // user tapped Stop during the warm-up window
+    if (!_memRunning) return;
 
-    startCPULoad(cfg.concurrency); // start CPU load after UI has updated
+    startCPULoad(cfg.concurrency);
 
-    // Async chunked allocation — yields between chunks so touch events are
-    // processed. The user can tap Stop while memory is still being allocated.
+    // Chunked allocation — yields between 10 MB chunks so touch events land.
     await allocateMemory(cfg.memoryMB);
 
-    // Only start thrash and timer if we're still running (user may have
-    // pressed Stop during the allocation window).
     if (!_memRunning) return;
-    startMemoryThrash();
-    startRef.current = Date.now();
-    timerRef.current = setInterval(() => {
+    startRef.current  = Date.now();
+    timerRef.current  = setInterval(() => {
       setElapsed(Math.round((Date.now() - startRef.current) / 1000));
     }, 1000);
   }
@@ -222,10 +194,7 @@ export default function SystemMetricsScreen() {
     stopCPULoad();
     releaseMemory();
     setRunning(false);
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   }
 
   const cfg = LOAD_CONFIG[loadLevel];
