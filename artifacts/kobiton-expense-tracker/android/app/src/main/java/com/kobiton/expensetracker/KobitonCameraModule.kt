@@ -176,8 +176,9 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
     // WHY a separate thrash thread:
     //   Android's zRAM subsystem compresses pages that have not been accessed
     //   recently, making them invisible to RSS metrics.  The thrash thread
-    //   writes one non-uniform byte per buffer every 20 ms, keeping all pages
-    //   physically resident and defeating zRAM compression.
+    //   performs a page-level sweep (one byte per 4 KB page, 4096-byte stride)
+    //   across every buffer every 100 ms, keeping all pages physically resident
+    //   and defeating zRAM compression.
 
     @Volatile private var memRunning = false
     private var memThread: Thread? = null
