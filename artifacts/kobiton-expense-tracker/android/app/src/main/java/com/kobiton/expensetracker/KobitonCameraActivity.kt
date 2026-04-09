@@ -79,6 +79,12 @@ class KobitonCameraActivity : AppCompatActivity() {
     private var backgroundHandler: Handler? = null
     private var isCapturing = false
 
+    // Snapshot of the last live-camera frame taken immediately before the
+    // standard camera session is closed in takePhoto().  Used as a fallback
+    // when textureView.getBitmap() returns null after the session switches
+    // (e.g. Kobiton camera unavailable, TextureView buffer transitioning).
+    private var fallbackBitmap: Bitmap? = null
+
     // ── Phase 1: standard Android Camera2 (preview) ──────────────────────────
     private var stdCameraDevice: android.hardware.camera2.CameraDevice? = null
     private var stdCaptureSession: android.hardware.camera2.CameraCaptureSession? = null
@@ -351,7 +357,27 @@ class KobitonCameraActivity : AppCompatActivity() {
     private fun takePhoto() {
         if (isCapturing) return
         isCapturing = true
-        Log.d(TAG, "KobitonCameraActivity: capture tapped — closing standard camera, opening Kobiton")
+        Log.d(TAG, "KobitonCameraActivity: capture tapped — snapshotting live frame before session switch")
+
+        // Snapshot the live camera frame NOW, while the standard camera session
+        // is still active and the TextureView is guaranteed to have a valid frame.
+        // This bitmap is used as a fallback in captureFromTextureView() when:
+        //   a) No Kobiton session is active (getCameraIdList() empty).
+        //   b) The TextureView buffer is momentarily null/black during the
+        //      standard → Kobiton session transition.
+        //   c) The Kobiton camera cannot be opened after all retries.
+        // Without this snapshot, the above cases all produce getBitmap() = null
+        // which forces finishCancelled() and silently discards the photo.
+        fallbackBitmap?.recycle()
+        fallbackBitmap = try {
+            textureView.getBitmap(CAPTURE_WIDTH, CAPTURE_HEIGHT).also {
+                Log.d(TAG, "KobitonCameraActivity: fallback snapshot ${if (it != null) "${it.width}x${it.height}" else "null"}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "KobitonCameraActivity: fallback snapshot failed — ${e.message}")
+            null
+        }
+
         // Release the standard preview session so the Kobiton CameraManager
         // can open its own session on the same TextureView surface.
         try { stdCaptureSession?.close() } catch (_: Exception) {}
@@ -435,9 +461,14 @@ class KobitonCameraActivity : AppCompatActivity() {
     private fun captureFromTextureView() {
         runOnUiThread {
             try {
-                val bitmap: Bitmap? = textureView.getBitmap(CAPTURE_WIDTH, CAPTURE_HEIGHT)
+                // Prefer the live TextureView frame (contains the Kobiton-injected
+                // receipt when a Kobiton session is active).  Fall back to the
+                // snapshot taken in takePhoto() if the TextureView is now null
+                // (camera session transition, or no Kobiton session active).
+                val bitmap: Bitmap? =
+                    textureView.getBitmap(CAPTURE_WIDTH, CAPTURE_HEIGHT) ?: fallbackBitmap
                 if (bitmap == null) {
-                    Log.e(TAG, "KobitonCameraActivity: textureView.getBitmap() returned null")
+                    Log.e(TAG, "KobitonCameraActivity: both getBitmap() and fallbackBitmap are null")
                     isCapturing = false
                     finishCancelled("Preview frame not available")
                     return@runOnUiThread
@@ -485,6 +516,7 @@ class KobitonCameraActivity : AppCompatActivity() {
         try { kobitonCameraDevice?.close()   } catch (e: Exception) { Log.e(TAG, "close kobitonCameraDevice: ${e.message}") }
         stdCaptureSession = null;     stdCameraDevice     = null
         kobitonCaptureSession = null; kobitonCameraDevice = null
+        fallbackBitmap?.recycle(); fallbackBitmap = null
     }
 
     private fun startBackgroundThread() {

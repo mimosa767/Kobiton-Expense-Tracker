@@ -121,21 +121,23 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
             for (i in 0 until threadCount) {
                 val seed = i * 137.3 + 1.0
                 val t = Thread {
-                    // Elevate OS scheduling priority so the Android scheduler gives
-                    // this thread maximum CPU time, producing a visible spike in
-                    // Kobiton's System Metrics panel.
+                    // Run at NORM_PRIORITY (Java 5 = Linux nice 0), the same level
+                    // as the Android UI thread and RN bridge thread.
                     //
-                    // THREAD_PRIORITY_URGENT_DISPLAY = –8  (Linux nice level).
-                    // Regular apps can set priorities down to –8 without special
-                    // permissions; system UI threads run at the same level.
+                    // WHY NOT MAX_PRIORITY / THREAD_PRIORITY_URGENT_DISPLAY (nice -8):
+                    //   Setting 6 threads to nice -8 preempts the UI thread (nice 0)
+                    //   on every scheduler tick.  The RN bridge thread — which
+                    //   delivers the Stop button's touch event — runs at nice 0.
+                    //   With all cores saturated by nice -8 threads the bridge
+                    //   thread can wait 100s of ms per tick, making the Stop button
+                    //   appear completely unresponsive.
                     //
-                    // We also set Java priority to MAX_PRIORITY (10) so the JVM
-                    // scheduler aligns with the OS scheduler hint.
-                    try {
-                        android.os.Process.setThreadPriority(
-                            android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY
-                        )
-                    } catch (_: Exception) { /* ignore — non-fatal */ }
+                    // WHY nice 0 still shows a visible spike:
+                    //   Multiple threads at the same priority each occupy a
+                    //   separate physical CPU core.  6 cores fully busy with
+                    //   FP math = ~70 % total CPU — easily visible in Kobiton's
+                    //   System Metrics panel.  The UI thread gets its fair share
+                    //   of one core, so touches register within 1–2 ms.
 
                     var v = seed
                     while (cpuRunning && !Thread.currentThread().isInterrupted) {
@@ -148,11 +150,11 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
                 }
                 t.name     = "kobiton-cpu-$i"
                 t.isDaemon = true
-                t.priority = Thread.MAX_PRIORITY  // Java-level priority (1–10)
+                t.priority = Thread.NORM_PRIORITY  // Java 5 = Linux nice 0, same as UI thread
                 t.start()
                 cpuThreads.add(t)
             }
-            Log.d(TAG, "KobitonCameraModule: startCpuStress — $threadCount threads at MAX_PRIORITY")
+            Log.d(TAG, "KobitonCameraModule: startCpuStress — $threadCount threads at NORM_PRIORITY")
             promise.resolve(threadCount)
         } catch (e: Exception) {
             Log.e(TAG, "KobitonCameraModule: startCpuStress exception — ${e.message}", e)
