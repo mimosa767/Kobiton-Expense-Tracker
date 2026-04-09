@@ -126,6 +126,40 @@ class KobitonCameraActivity : AppCompatActivity() {
         closeCamera(); stopBackgroundThread(); super.onPause()
     }
 
+    // ─── System bar height helpers ────────────────────────────────────────────
+    //
+    // WHY we need these:
+    //   buildLayout() creates views programmatically using raw pixel values.
+    //   Without accounting for system bars the cancel button can overlap the
+    //   status bar and — critically — the capture button can sit BEHIND the
+    //   navigation bar (invisible to the user).
+    //
+    //   On a Pixel 6 (density 2.625):
+    //     status bar  ≈ 27 dp = ~71 px
+    //     3-button nav bar ≈ 48 dp = ~126 px
+    //
+    //   The old code used bottomMargin = 100 px for the capture button —
+    //   smaller than the nav bar — so the button was completely hidden.
+    //   The user saw the Kobiton-injected receipt but had no visible way to
+    //   capture it, making the camera flow appear broken on Android.
+    //
+    //   iOS does NOT have this problem because IosCameraScreen is a React
+    //   Native component that uses useSafeAreaInsets(), which automatically
+    //   offsets UI elements above the home indicator / nav bar.
+
+    private fun dpToPx(dp: Float): Int =
+        (dp * resources.displayMetrics.density + 0.5f).toInt()
+
+    private fun statusBarHeightPx(): Int {
+        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+        return if (id > 0) resources.getDimensionPixelSize(id) else dpToPx(24f)
+    }
+
+    private fun navBarHeightPx(): Int {
+        val id = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        return if (id > 0) resources.getDimensionPixelSize(id) else dpToPx(48f)
+    }
+
     private fun buildLayout() {
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
@@ -135,27 +169,61 @@ class KobitonCameraActivity : AppCompatActivity() {
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         }
         root.addView(textureView)
+
+        // Cancel (✕) button — top-left, clear of the status bar.
         val cancelBtn = TextView(this).apply {
-            text = "✕"; textSize = 20f; setTextColor(Color.WHITE)
-            setBackgroundColor(0xAA000000.toInt()); setPadding(40, 28, 40, 28)
-            gravity = Gravity.CENTER; isClickable = true; isFocusable = true
+            text = "✕"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0xAA000000.toInt())
+            setPadding(dpToPx(16f), dpToPx(12f), dpToPx(16f), dpToPx(12f))
+            gravity = Gravity.CENTER
+            isClickable = true
+            isFocusable = true
             contentDescription = "Cancel"
-            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).also {
-                it.gravity = Gravity.TOP or Gravity.START; it.setMargins(40, 100, 0, 0)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            ).also {
+                it.gravity = Gravity.TOP or Gravity.START
+                // Position below the status bar so the button is never obscured.
+                it.setMargins(dpToPx(16f), statusBarHeightPx() + dpToPx(8f), 0, 0)
             }
         }
-        cancelBtn.setOnClickListener { Log.d(TAG, "KobitonCameraActivity: cancel pressed"); finishCancelled("User cancelled") }
+        cancelBtn.setOnClickListener {
+            Log.d(TAG, "KobitonCameraActivity: cancel pressed")
+            finishCancelled("User cancelled")
+        }
         root.addView(cancelBtn)
+
+        // Capture (⬤) button — bottom center, clear of the navigation bar.
+        //
+        // WHY bottomMargin = navBarHeightPx() + 32 dp:
+        //   The navigation bar on a 3-button Pixel 6 is ~126 px at 420 dpi.
+        //   Using a static value of 100 px hid the button behind the nav bar.
+        //   We now query the actual nav bar height at runtime and add 32 dp
+        //   of breathing room so the button is comfortably above it.
         captureBtn = TextView(this).apply {
-            text = "⬤"; textSize = 52f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
-            isClickable = false; isFocusable = false; isEnabled = false; alpha = 0.35f
+            text = "⬤"
+            textSize = 52f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            isClickable = false
+            isFocusable = false
+            isEnabled = false
+            alpha = 0.35f
             contentDescription = "Take photo"
-            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).also {
-                it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; it.bottomMargin = 100
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            ).also {
+                it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                it.bottomMargin = navBarHeightPx() + dpToPx(32f)
             }
         }
         captureBtn.setOnClickListener { takePhoto() }
         root.addView(captureBtn)
+
         setContentView(root)
     }
 
