@@ -1,6 +1,7 @@
 package com.kobiton.expensetracker
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -17,34 +18,46 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 
-import kobiton.hardware.camera2.CameraDevice
-import kobiton.hardware.camera2.CameraManager
-import kobiton.hardware.camera2.CameraCaptureSession
-import kobiton.hardware.camera2.CaptureRequest
+// Kobiton Camera2 — used ONLY at capture time so injection applies correctly.
+import kobiton.hardware.camera2.CameraDevice     as KobitonCameraDevice
+import kobiton.hardware.camera2.CameraManager    as KobitonCameraManager
+import kobiton.hardware.camera2.CameraCaptureSession as KobitonCameraCaptureSession
 
 /**
- * Native camera activity using kobiton.hardware.camera2 classes.
+ * Two-phase camera activity for Kobiton image injection.
  *
- * CAPTURE STRATEGY — TextureView.getBitmap() approach
- * ─────────────────────────────────────────────────────
- * Kobiton's ImageInjectionClient intercepts the preview surface only
- * (the SurfaceTexture backing the TextureView). A separate ImageReader
- * surface added to the session is NOT intercepted — sending a
- * TEMPLATE_STILL_CAPTURE request to it therefore returns the real camera
- * frame instead of the injected image.
+ * ─── PHASE 1 — Preview (standard android.hardware.camera2) ───────────────────
+ * The live camera feed is rendered into the TextureView using the standard
+ * Android Camera2 API.  The user sees the physical camera (not a receipt),
+ * matching the iOS experience where expo-camera's CameraView shows the live
+ * feed before Kobiton injection is activated.
  *
- * Confirmed by the Kobiton device log warning:
- *   "CameraCaptureSession.capture() surface is not in the list of
- *    intercepted. It's either undeclared or one purposely omitted."
+ * ─── PHASE 2 — Capture (kobiton.hardware.camera2) ───────────────────────────
+ * When the user taps the capture button:
+ *   1. The standard camera session is closed.
+ *   2. Kobiton's CameraManager.getInstance() opens a new session on the same
+ *      TextureView surface.
+ *   3. We wait 800 ms for Kobiton's ImageInjectionClient to populate the
+ *      SurfaceTexture with the configured receipt image.
+ *   4. TextureView.getBitmap(CAPTURE_WIDTH, CAPTURE_HEIGHT) reads the
+ *      intercepted frame (injected receipt, or live frame if no injection).
+ *   5. The bitmap is compressed to JPEG, saved to cache, and returned via
+ *      RESULT_OK / EXTRA_PHOTO_URI.
  *
- * Fix: read the frame directly from the TextureView via getBitmap().
- * TextureView renders the intercepted (injected) preview stream, so
- * getBitmap() returns the Kobiton-synthetic frame, not the real sensor.
+ * ─── WHY this split is necessary ────────────────────────────────────────────
+ * kobiton.hardware.camera2.CameraManager intercepts at the CameraManager
+ * level — injection is applied from the very first frame.  Using it for the
+ * preview causes the receipt to appear IMMEDIATELY when the camera opens,
+ * with no live-camera phase.  iOS does not have this problem because Kobiton
+ * swizzles AVCaptureSession at the OS level; the live feed appears first and
+ * injection updates it later.
  *
- * The session is configured with ONLY the preview surface — no ImageReader.
+ * By using the standard CameraManager for preview and Kobiton's only at
+ * capture time we reproduce the same UX on both platforms:
+ *   "Live camera" → tap capture → injected receipt is saved.
  *
- * Returns RESULT_OK + Intent extra EXTRA_PHOTO_URI on success.
- * Returns RESULT_CANCELED on user cancel or any unrecoverable error.
+ * Returns RESULT_OK + EXTRA_PHOTO_URI on success.
+ * Returns RESULT_CANCELED on user cancel or unrecoverable error.
  */
 class KobitonCameraActivity : AppCompatActivity() {
 
@@ -53,61 +66,88 @@ class KobitonCameraActivity : AppCompatActivity() {
         const val EXTRA_PHOTO_URI = "photoUri"
         private const val CAPTURE_WIDTH  = 1280
         private const val CAPTURE_HEIGHT = 720
-        private const val MAX_OPEN_RETRIES = 3
-        private const val RETRY_DELAY_MS   = 300L
+        private const val MAX_KOBITON_RETRIES = 3
+        private const val RETRY_DELAY_MS      = 300L
+        // Time (ms) to wait for Kobiton injection to populate the TextureView
+        // after the Kobiton capture session is configured.
+        private const val INJECTION_WAIT_MS   = 800L
     }
 
     private lateinit var textureView: TextureView
     private lateinit var captureBtn: TextView
-    private var kobitonCameraDevice: CameraDevice? = null
-    private var kobitonCaptureSession: CameraCaptureSession? = null
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
     private var isCapturing = false
-    // Retry counter for camera open errors.  The Kobiton SDK's CameraManager
-    // retains internal state for ~200–300 ms after the first session closes.
-    // A second openCamera() call within that window triggers onError
-    // (ERROR_CAMERA_IN_USE = 2 or ERROR_CAMERA_DEVICE = 4).  We retry up to
-    // MAX_OPEN_RETRIES times with a RETRY_DELAY_MS back-off before giving up.
-    private var openRetries = 0
 
+    // ── Phase 1: standard Android Camera2 (preview) ──────────────────────────
+    private var stdCameraDevice: android.hardware.camera2.CameraDevice? = null
+    private var stdCaptureSession: android.hardware.camera2.CameraCaptureSession? = null
+
+    // ── Phase 2: Kobiton Camera2 (capture only) ───────────────────────────────
+    private var kobitonCameraDevice: KobitonCameraDevice? = null
+    private var kobitonCaptureSession: KobitonCameraCaptureSession? = null
+    private var kobitonOpenRetries = 0
+
+    // ── SurfaceTexture listener ───────────────────────────────────────────────
     private val surfaceTextureListener = object : TextureView.SurfaceTextureListener {
         override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
             Log.d(TAG, "KobitonCameraActivity: surface ready (${width}x${height})")
-            openCamera()
+            openPreviewCamera()
         }
         override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
         override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
         override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
     }
 
-    private val cameraStateCallback = object : CameraDevice.StateCallback() {
-        override fun onOpened(camera: CameraDevice) {
-            Log.d(TAG, "KobitonCameraActivity: CameraDevice.onOpened (retries were $openRetries)")
-            openRetries = 0
+    // ── Standard Camera2 callbacks (Phase 1) ─────────────────────────────────
+    private val stdCameraCallback = object : android.hardware.camera2.CameraDevice.StateCallback() {
+        override fun onOpened(camera: android.hardware.camera2.CameraDevice) {
+            Log.d(TAG, "KobitonCameraActivity: standard CameraDevice.onOpened")
+            stdCameraDevice = camera
+            startPreviewSession()
+        }
+        override fun onDisconnected(camera: android.hardware.camera2.CameraDevice) {
+            Log.w(TAG, "KobitonCameraActivity: standard CameraDevice.onDisconnected")
+            camera.close(); stdCameraDevice = null
+        }
+        override fun onError(camera: android.hardware.camera2.CameraDevice, error: Int) {
+            Log.e(TAG, "KobitonCameraActivity: standard CameraDevice.onError code=$error")
+            camera.close(); stdCameraDevice = null
+            runOnUiThread { finishCancelled("Preview camera error $error") }
+        }
+    }
+
+    // ── Kobiton Camera2 callbacks (Phase 2) ───────────────────────────────────
+    private val kobitonCameraCallback = object : KobitonCameraDevice.StateCallback() {
+        override fun onOpened(camera: KobitonCameraDevice) {
+            Log.d(TAG, "KobitonCameraActivity: Kobiton CameraDevice.onOpened (retries were $kobitonOpenRetries)")
+            kobitonOpenRetries = 0
             kobitonCameraDevice = camera
-            startPreview()
+            startKobitonSession()
         }
-        override fun onDisconnected(camera: CameraDevice) {
-            Log.w(TAG, "KobitonCameraActivity: CameraDevice.onDisconnected")
+        override fun onDisconnected(camera: KobitonCameraDevice) {
+            Log.w(TAG, "KobitonCameraActivity: Kobiton CameraDevice.onDisconnected")
             camera.close(); kobitonCameraDevice = null
         }
-        override fun onError(camera: CameraDevice, error: Int) {
-            Log.e(TAG, "KobitonCameraActivity: CameraDevice.onError code=$error, retries=$openRetries")
+        override fun onError(camera: KobitonCameraDevice, error: Int) {
+            Log.e(TAG, "KobitonCameraActivity: Kobiton CameraDevice.onError code=$error, retries=$kobitonOpenRetries")
             camera.close(); kobitonCameraDevice = null
-            // Retry to let the Kobiton SDK release its previous camera session.
-            // ERROR_CAMERA_IN_USE (2) and ERROR_CAMERA_DEVICE (4) are the most
-            // common codes seen on second-open; both clear after a short delay.
-            if (openRetries < MAX_OPEN_RETRIES) {
-                openRetries++
-                Log.d(TAG, "KobitonCameraActivity: retrying openCamera in ${RETRY_DELAY_MS}ms (attempt $openRetries/$MAX_OPEN_RETRIES)")
-                backgroundHandler?.postDelayed({ openCamera() }, RETRY_DELAY_MS)
+            // Retry — the SDK retains state ~200-300ms after the first session closes.
+            if (kobitonOpenRetries < MAX_KOBITON_RETRIES) {
+                kobitonOpenRetries++
+                Log.d(TAG, "KobitonCameraActivity: retrying Kobiton camera in ${RETRY_DELAY_MS}ms (attempt $kobitonOpenRetries)")
+                backgroundHandler?.postDelayed({ openKobitonCamera() }, RETRY_DELAY_MS)
             } else {
-                openRetries = 0
-                finishCancelled("Camera device error $error after $MAX_OPEN_RETRIES retries")
+                kobitonOpenRetries = 0
+                Log.w(TAG, "KobitonCameraActivity: Kobiton camera failed after $MAX_KOBITON_RETRIES retries — capturing live frame")
+                captureFromTextureView()
             }
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Lifecycle
+    // ─────────────────────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -118,34 +158,37 @@ class KobitonCameraActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         startBackgroundThread()
-        if (textureView.isAvailable) openCamera()
+        if (textureView.isAvailable) openPreviewCamera()
         else textureView.surfaceTextureListener = surfaceTextureListener
     }
 
     override fun onPause() {
-        closeCamera(); stopBackgroundThread(); super.onPause()
+        closeAllCameras()
+        stopBackgroundThread()
+        super.onPause()
     }
 
-    // ─── System bar height helpers ────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // Layout
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── System bar height helpers ─────────────────────────────────────────────
     //
     // WHY we need these:
-    //   buildLayout() creates views programmatically using raw pixel values.
+    //   buildLayout() creates views programmatically using pixel values.
     //   Without accounting for system bars the cancel button can overlap the
     //   status bar and — critically — the capture button can sit BEHIND the
     //   navigation bar (invisible to the user).
     //
     //   On a Pixel 6 (density 2.625):
-    //     status bar  ≈ 27 dp = ~71 px
+    //     status bar       ≈ 27 dp = ~71 px
     //     3-button nav bar ≈ 48 dp = ~126 px
     //
-    //   The old code used bottomMargin = 100 px for the capture button —
-    //   smaller than the nav bar — so the button was completely hidden.
-    //   The user saw the Kobiton-injected receipt but had no visible way to
-    //   capture it, making the camera flow appear broken on Android.
+    //   The old code used bottomMargin = 100 px — smaller than the nav bar —
+    //   so the capture button was completely hidden.
     //
     //   iOS does NOT have this problem because IosCameraScreen is a React
-    //   Native component that uses useSafeAreaInsets(), which automatically
-    //   offsets UI elements above the home indicator / nav bar.
+    //   Native component that uses useSafeAreaInsets() automatically.
 
     private fun dpToPx(dp: Float): Int =
         (dp * resources.displayMetrics.density + 0.5f).toInt()
@@ -163,14 +206,21 @@ class KobitonCameraActivity : AppCompatActivity() {
     private fun buildLayout() {
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
-            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
         }
+
         textureView = TextureView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
         }
         root.addView(textureView)
 
-        // Cancel (✕) button — top-left, clear of the status bar.
+        // Cancel (✕) — top-left, clear of the status bar.
         val cancelBtn = TextView(this).apply {
             text = "✕"
             textSize = 20f
@@ -186,7 +236,6 @@ class KobitonCameraActivity : AppCompatActivity() {
                 FrameLayout.LayoutParams.WRAP_CONTENT
             ).also {
                 it.gravity = Gravity.TOP or Gravity.START
-                // Position below the status bar so the button is never obscured.
                 it.setMargins(dpToPx(16f), statusBarHeightPx() + dpToPx(8f), 0, 0)
             }
         }
@@ -196,13 +245,12 @@ class KobitonCameraActivity : AppCompatActivity() {
         }
         root.addView(cancelBtn)
 
-        // Capture (⬤) button — bottom center, clear of the navigation bar.
+        // Capture (⬤) — bottom center, above the navigation bar.
         //
         // WHY bottomMargin = navBarHeightPx() + 32 dp:
-        //   The navigation bar on a 3-button Pixel 6 is ~126 px at 420 dpi.
-        //   Using a static value of 100 px hid the button behind the nav bar.
-        //   We now query the actual nav bar height at runtime and add 32 dp
-        //   of breathing room so the button is comfortably above it.
+        //   Static 100 px hid the button behind the ~126 px nav bar on Pixel 6.
+        //   We now query the actual nav bar height at runtime and add 32 dp of
+        //   breathing room so the button is always comfortably visible.
         captureBtn = TextView(this).apply {
             text = "⬤"
             textSize = 52f
@@ -227,121 +275,166 @@ class KobitonCameraActivity : AppCompatActivity() {
         setContentView(root)
     }
 
-    private fun startBackgroundThread() {
-        backgroundThread = HandlerThread("KobitonCameraBg").also { it.start() }
-        backgroundHandler = Handler(backgroundThread!!.looper)
-    }
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 1 — Standard Camera2 preview (shows live camera to the user)
+    // ─────────────────────────────────────────────────────────────────────────
 
-    private fun stopBackgroundThread() {
-        backgroundThread?.quitSafely()
-        try { backgroundThread?.join() } catch (e: InterruptedException) { Log.e(TAG, "stopBackgroundThread interrupted", e) }
-        backgroundThread = null; backgroundHandler = null
-    }
-
-    private fun openCamera() {
+    private fun openPreviewCamera() {
         try {
-            Log.d(TAG, "KobitonCameraActivity: calling kobiton.hardware.camera2.CameraManager.getInstance()")
-            val manager: CameraManager = CameraManager.getInstance(this)
-            val cameraIds = manager.getCameraIdList()
-            if (cameraIds.isEmpty()) { finishCancelled("No cameras available"); return }
-            val cameraId = cameraIds[0]
-            Log.d(TAG, "KobitonCameraActivity: opening camera id=$cameraId")
-            manager.openCamera(cameraId, cameraStateCallback, backgroundHandler)
+            Log.d(TAG, "KobitonCameraActivity: opening android.hardware.camera2 for live preview")
+            val manager = applicationContext.getSystemService(Context.CAMERA_SERVICE)
+                    as android.hardware.camera2.CameraManager
+            val cameraId = manager.cameraIdList.firstOrNull() ?: run {
+                finishCancelled("No cameras available"); return
+            }
+            // Permission is already granted by AndroidKobitonCamera before
+            // this Activity is launched; suppress the lint warning.
+            @Suppress("MissingPermission")
+            manager.openCamera(cameraId, stdCameraCallback, backgroundHandler)
         } catch (e: Exception) {
-            Log.e(TAG, "KobitonCameraActivity: openCamera failed — ${e.javaClass.name}: ${e.message}", e)
-            finishCancelled("Failed to open camera: ${e.message}")
+            Log.e(TAG, "KobitonCameraActivity: openPreviewCamera failed — ${e.message}", e)
+            finishCancelled("Failed to open preview camera: ${e.message}")
         }
     }
 
-    /**
-     * Configure a capture session with ONLY the TextureView preview surface.
-     *
-     * Previously we added an ImageReader surface here, but the Kobiton
-     * ImageInjectionClient only intercepts the SurfaceTexture (TextureView).
-     * The ImageReader surface was unintercepted, causing still captures to
-     * read real sensor data instead of the Kobiton-injected frame.
-     *
-     * With only the preview surface in the session, getBitmap() (see
-     * takePhoto) reads the correct intercepted frame.
-     */
-    private fun startPreview() {
-        val camera = kobitonCameraDevice ?: return
-        val st = textureView.surfaceTexture ?: run { Log.e(TAG, "startPreview: surfaceTexture null"); return }
+    private fun startPreviewSession() {
+        val camera = stdCameraDevice ?: return
+        val st = textureView.surfaceTexture ?: run {
+            Log.e(TAG, "KobitonCameraActivity: startPreviewSession — surfaceTexture null"); return
+        }
         try {
             st.setDefaultBufferSize(CAPTURE_WIDTH, CAPTURE_HEIGHT)
-            val previewSurface = Surface(st)
-            val previewRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                addTarget(previewSurface)
-            }
-            // Only include the preview surface — no ImageReader.
-            // Kobiton's ImageInjectionClient intercepts this surface via MITM.
-            camera.createCaptureSession(listOf(previewSurface), object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(session: CameraCaptureSession) {
-                    Log.d(TAG, "KobitonCameraActivity: CaptureSession configured — starting preview")
-                    kobitonCaptureSession = session
-                    try { session.setRepeatingRequest(previewRequest.build(), null, backgroundHandler) }
-                    catch (e: Exception) { Log.e(TAG, "setRepeatingRequest failed: ${e.message}", e) }
-                    // Wait 800 ms for the TextureView GL texture to receive its first
-                    // frame from the camera (or from Kobiton's injection pipeline).
-                    // getBitmap() called before this window returns a solid-black bitmap.
-                    runOnUiThread {
-                        captureBtn.postDelayed({
-                            captureBtn.isEnabled   = true
-                            captureBtn.isClickable = true
-                            captureBtn.isFocusable = true
-                            captureBtn.alpha       = 1.0f
-                            Log.d(TAG, "KobitonCameraActivity: capture button enabled")
-                        }, 800)
+            val surface = Surface(st)
+            val request = camera.createCaptureRequest(
+                android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW
+            ).apply { addTarget(surface) }
+
+            camera.createCaptureSession(
+                listOf(surface),
+                object : android.hardware.camera2.CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: android.hardware.camera2.CameraCaptureSession) {
+                        Log.d(TAG, "KobitonCameraActivity: standard preview session configured")
+                        stdCaptureSession = session
+                        try {
+                            session.setRepeatingRequest(request.build(), null, backgroundHandler)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "standard setRepeatingRequest failed: ${e.message}", e)
+                        }
+                        // Enable the capture button once the live preview is stable.
+                        runOnUiThread {
+                            captureBtn.postDelayed({
+                                captureBtn.isEnabled   = true
+                                captureBtn.isClickable = true
+                                captureBtn.isFocusable = true
+                                captureBtn.alpha       = 1.0f
+                                Log.d(TAG, "KobitonCameraActivity: capture button enabled")
+                            }, 800)
+                        }
                     }
-                }
-                override fun onConfigureFailed(session: CameraCaptureSession) {
-                    Log.e(TAG, "KobitonCameraActivity: CaptureSession.onConfigureFailed")
-                    finishCancelled("Camera session configuration failed")
-                }
-            }, backgroundHandler)
+                    override fun onConfigureFailed(session: android.hardware.camera2.CameraCaptureSession) {
+                        Log.e(TAG, "KobitonCameraActivity: standard preview session config failed")
+                        runOnUiThread { finishCancelled("Preview session configuration failed") }
+                    }
+                },
+                backgroundHandler
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "KobitonCameraActivity: startPreview failed — ${e.message}", e)
+            Log.e(TAG, "KobitonCameraActivity: startPreviewSession failed — ${e.message}", e)
             finishCancelled("Failed to start preview: ${e.message}")
         }
     }
 
-    /**
-     * Capture the current preview frame via TextureView.getBitmap(width, height).
-     *
-     * IMPORTANT: getBitmap(width, height) reads from the TextureView's SurfaceTexture,
-     * which is the surface Kobiton's ImageInjectionClient intercepts. This
-     * means the bitmap contains the Kobiton-injected synthetic frame (e.g.
-     * a QR-code image), not the real camera sensor output.
-     *
-     * WHY width/height must be specified (CAPTURE_WIDTH × CAPTURE_HEIGHT):
-     * ─────────────────────────────────────────────────────────────────────
-     * setDefaultBufferSize() configures the SurfaceTexture to receive 1280×720
-     * landscape buffers from the camera.  On a portrait phone the TextureView
-     * layout size is something like 1080×2156.  getBitmap() without arguments
-     * captures at the VIEW dimensions, which stretches the landscape 1280×720
-     * buffer ~3× vertically — making the QR code undecodeable by jsQR.
-     *
-     * getBitmap(CAPTURE_WIDTH, CAPTURE_HEIGHT) renders the TextureView GL
-     * texture into a 1280×720 bitmap, matching the buffer dimensions exactly.
-     * This preserves the injected image's aspect ratio and produces a
-     * decodeable QR code image for jsQR.
-     *
-     * Confirmed by device log: "surface ready (1080x2156)" vs
-     * "App surface: size=1280x720" — the mismatch caused the distortion.
-     *
-     * The bitmap is compressed to JPEG on the background thread and written
-     * to the app cache directory; the URI is returned to React Native via
-     * the activity result.
-     */
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 2 — Kobiton capture (injection-aware, triggered by user tap)
+    // ─────────────────────────────────────────────────────────────────────────
+
     private fun takePhoto() {
         if (isCapturing) return
         isCapturing = true
-        Log.d(TAG, "KobitonCameraActivity: takePhoto — reading injected frame from TextureView at ${CAPTURE_WIDTH}x${CAPTURE_HEIGHT}")
+        Log.d(TAG, "KobitonCameraActivity: capture tapped — closing standard camera, opening Kobiton")
+        // Release the standard preview session so the Kobiton CameraManager
+        // can open its own session on the same TextureView surface.
+        try { stdCaptureSession?.close() } catch (_: Exception) {}
+        try { stdCameraDevice?.close()   } catch (_: Exception) {}
+        stdCaptureSession = null
+        stdCameraDevice   = null
+        openKobitonCamera()
+    }
+
+    private fun openKobitonCamera() {
+        try {
+            Log.d(TAG, "KobitonCameraActivity: calling kobiton.hardware.camera2.CameraManager.getInstance()")
+            val manager = KobitonCameraManager.getInstance(this)
+            val cameraIds = manager.getCameraIdList()
+            if (cameraIds.isEmpty()) {
+                Log.w(TAG, "KobitonCameraActivity: no Kobiton cameras — falling back to live frame")
+                captureFromTextureView()
+                return
+            }
+            Log.d(TAG, "KobitonCameraActivity: opening Kobiton camera id=${cameraIds[0]}")
+            manager.openCamera(cameraIds[0], kobitonCameraCallback, backgroundHandler)
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraActivity: openKobitonCamera failed — ${e.message}", e)
+            captureFromTextureView()
+        }
+    }
+
+    private fun startKobitonSession() {
+        val camera = kobitonCameraDevice ?: return
+        val st = textureView.surfaceTexture ?: run {
+            Log.e(TAG, "KobitonCameraActivity: startKobitonSession — surfaceTexture null")
+            captureFromTextureView(); return
+        }
+        try {
+            st.setDefaultBufferSize(CAPTURE_WIDTH, CAPTURE_HEIGHT)
+            val surface = Surface(st)
+            val request = camera.createCaptureRequest(KobitonCameraDevice.TEMPLATE_PREVIEW).apply {
+                addTarget(surface)
+            }
+            camera.createCaptureSession(
+                listOf(surface),
+                object : KobitonCameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: KobitonCameraCaptureSession) {
+                        Log.d(TAG, "KobitonCameraActivity: Kobiton session configured — waiting ${INJECTION_WAIT_MS}ms for injection")
+                        kobitonCaptureSession = session
+                        try {
+                            session.setRepeatingRequest(request.build(), null, backgroundHandler)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Kobiton setRepeatingRequest failed: ${e.message}", e)
+                        }
+                        // Wait for Kobiton's ImageInjectionClient to populate
+                        // the SurfaceTexture with the configured receipt image.
+                        // getBitmap() called before this window returns the last
+                        // live-camera frame instead of the injected receipt.
+                        backgroundHandler?.postDelayed({ captureFromTextureView() }, INJECTION_WAIT_MS)
+                    }
+                    override fun onConfigureFailed(session: KobitonCameraCaptureSession) {
+                        Log.e(TAG, "KobitonCameraActivity: Kobiton session config failed — falling back")
+                        captureFromTextureView()
+                    }
+                },
+                backgroundHandler
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraActivity: startKobitonSession failed — ${e.message}", e)
+            captureFromTextureView()
+        }
+    }
+
+    /**
+     * Read the current TextureView frame and save it as a JPEG.
+     *
+     * Called after the Kobiton session has been running for INJECTION_WAIT_MS,
+     * so the TextureView contains the Kobiton-injected receipt image (if
+     * injection is active) or the last live camera frame (if no injection).
+     *
+     * IMPORTANT: getBitmap(CAPTURE_WIDTH, CAPTURE_HEIGHT) must be called on
+     * the UI thread.  Specifying the buffer dimensions avoids the ~3× vertical
+     * stretch that would occur if the portrait view size were used instead.
+     */
+    private fun captureFromTextureView() {
         runOnUiThread {
             try {
-                // getBitmap(CAPTURE_WIDTH, CAPTURE_HEIGHT) must be called on the UI thread.
-                // Specifying dimensions captures at the buffer's native 1280×720 size,
-                // not the portrait view size — avoids the ~3× vertical stretch.
                 val bitmap: Bitmap? = textureView.getBitmap(CAPTURE_WIDTH, CAPTURE_HEIGHT)
                 if (bitmap == null) {
                     Log.e(TAG, "KobitonCameraActivity: textureView.getBitmap() returned null")
@@ -356,7 +449,10 @@ class KobitonCameraActivity : AppCompatActivity() {
                         bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                         bitmap.recycle()
                         val bytes = out.toByteArray()
-                        val photoFile = java.io.File(cacheDir, "kobiton_receipt_${System.currentTimeMillis()}.jpg")
+                        val photoFile = java.io.File(
+                            cacheDir,
+                            "kobiton_receipt_${System.currentTimeMillis()}.jpg"
+                        )
                         java.io.FileOutputStream(photoFile).use { it.write(bytes) }
                         val uri = "file://${photoFile.absolutePath}"
                         Log.d(TAG, "KobitonCameraActivity: photo saved → $uri (${bytes.size} bytes)")
@@ -378,15 +474,36 @@ class KobitonCameraActivity : AppCompatActivity() {
         }
     }
 
-    private fun closeCamera() {
-        try {
-            kobitonCaptureSession?.close(); kobitonCaptureSession = null
-            kobitonCameraDevice?.close();   kobitonCameraDevice = null
-        } catch (e: Exception) { Log.e(TAG, "closeCamera error: ${e.message}", e) }
+    // ─────────────────────────────────────────────────────────────────────────
+    // Shared helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun closeAllCameras() {
+        try { stdCaptureSession?.close()     } catch (e: Exception) { Log.e(TAG, "close stdCaptureSession: ${e.message}") }
+        try { stdCameraDevice?.close()       } catch (e: Exception) { Log.e(TAG, "close stdCameraDevice: ${e.message}") }
+        try { kobitonCaptureSession?.close() } catch (e: Exception) { Log.e(TAG, "close kobitonCaptureSession: ${e.message}") }
+        try { kobitonCameraDevice?.close()   } catch (e: Exception) { Log.e(TAG, "close kobitonCameraDevice: ${e.message}") }
+        stdCaptureSession = null;     stdCameraDevice     = null
+        kobitonCaptureSession = null; kobitonCameraDevice = null
+    }
+
+    private fun startBackgroundThread() {
+        backgroundThread = HandlerThread("KobitonCameraBg").also { it.start() }
+        backgroundHandler = Handler(backgroundThread!!.looper)
+    }
+
+    private fun stopBackgroundThread() {
+        backgroundThread?.quitSafely()
+        try { backgroundThread?.join() } catch (e: InterruptedException) {
+            Log.e(TAG, "stopBackgroundThread interrupted", e)
+        }
+        backgroundThread = null
+        backgroundHandler = null
     }
 
     private fun finishCancelled(reason: String = "cancelled") {
         Log.w(TAG, "KobitonCameraActivity: finishing RESULT_CANCELED — $reason")
-        setResult(Activity.RESULT_CANCELED); finish()
+        setResult(Activity.RESULT_CANCELED)
+        finish()
     }
 }
