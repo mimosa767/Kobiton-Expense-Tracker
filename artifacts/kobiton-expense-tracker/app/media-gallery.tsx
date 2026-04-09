@@ -155,7 +155,31 @@ export default function MediaGalleryScreen() {
         Alert.alert('Not Available', 'KobitonCameraModule is not registered in this build.');
         return;
       }
-      const uri: string = await mod.openCamera();
+
+      // Settle delay: CameraView surface teardown is async (~300ms).  The
+      // PermissionsAndroid.request() above resolves almost instantly when
+      // already granted, leaving no time for the surface to release.  Without
+      // this pause the bridge can catch the module mid-teardown and throw
+      // "undefined is not a function" (seen at 14:13:43 in the Kobiton log,
+      // 341ms after "Surface destroyed at 14:13:43.602").
+      await new Promise<void>(resolve => setTimeout(resolve, 350));
+
+      // One retry: if the surface finished tearing down but the bridge hasn't
+      // yet re-registered the method, wait 600ms and try once more.
+      const callWithRetry = async <T,>(fn: () => Promise<T>): Promise<T> => {
+        try {
+          return await fn();
+        } catch (e: any) {
+          if (e?.message?.includes('undefined is not a function')) {
+            console.warn('[QRScanner] module not ready, retrying in 600ms…');
+            await new Promise<void>(r => setTimeout(r, 600));
+            return fn();
+          }
+          throw e;
+        }
+      };
+
+      const uri: string = await callWithRetry(() => mod.openCamera());
 
       // 3. Read the captured JPEG as base64, then run jsQR on its pixels.
       const b64 = await uriToBase64(uri);

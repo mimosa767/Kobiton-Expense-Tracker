@@ -135,10 +135,20 @@ export default function LocationMockScreen() {
         if (cancelled) return;
         setStatus('acquiring');
 
-        // Watch for real-time location updates.  timeInterval/distanceInterval=0
-        // means "as fast as the OS reports" — catches Kobiton injection immediately.
+        // Watch for real-time location updates.
+        //
+        // WHY timeInterval: 2000 instead of 0:
+        //   Android's FusedLocationProvider enforces a minimum delivery interval.
+        //   Requesting timeInterval=0 ("as fast as possible") causes the provider
+        //   to log "location delivery blocked - too fast" for every update that
+        //   arrives sooner than its internal minimum (~1s on Pixel 6).  When the
+        //   warning fires the update is still delivered, but under backpressure the
+        //   very first update (the Kobiton-injected coordinate) can be dropped.
+        //   Kobiton injects at roughly 2-second intervals; matching timeInterval
+        //   to that rate avoids the backpressure log entirely and ensures the first
+        //   injected fix is always delivered.
         subscription = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, timeInterval: 0, distanceInterval: 0 },
+          { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 0 },
           async (pos) => {
             if (cancelled) return;
             const { city, country } = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
