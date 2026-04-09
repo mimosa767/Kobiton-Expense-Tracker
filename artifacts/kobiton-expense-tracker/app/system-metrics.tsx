@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  NativeModules,
   Platform,
   ScrollView,
   StyleSheet,
@@ -22,37 +24,42 @@ const LOAD_CONFIG: Record<LoadLevel, {
   cpuDesc: string;
   memDesc: string;
 }> = {
-  light:   { label: 'Light',   color: Colors.accent,   concurrency: 1, memoryMB: 30,  cpuDesc: '1 loop',  memDesc: '30 MB' },
-  medium:  { label: 'Medium',  color: Colors.warning,  concurrency: 2, memoryMB: 100, cpuDesc: '2 loops', memDesc: '100 MB' },
-  heavy:   { label: 'Heavy',   color: Colors.error,    concurrency: 4, memoryMB: 250, cpuDesc: '4 loops', memDesc: '250 MB' },
-  extreme: { label: 'Extreme', color: '#7C3AED',        concurrency: 6, memoryMB: 400, cpuDesc: '6 loops', memDesc: '400 MB' },
+  light:   { label: 'Light',   color: Colors.accent,   concurrency: 1, memoryMB: 30,  cpuDesc: '1 thread',  memDesc: '30 MB' },
+  medium:  { label: 'Medium',  color: Colors.warning,  concurrency: 2, memoryMB: 100, cpuDesc: '2 threads', memDesc: '100 MB' },
+  heavy:   { label: 'Heavy',   color: Colors.error,    concurrency: 4, memoryMB: 200, cpuDesc: '4 threads', memDesc: '200 MB' },
+  extreme: { label: 'Extreme', color: '#7C3AED',        concurrency: 6, memoryMB: 300, cpuDesc: '6 threads', memDesc: '300 MB' },
 };
 
-// ─── Monotonic clock ──────────────────────────────────────────────────────────
-// performance.now() is not guaranteed on all RN/Hermes versions — fall back
-// to Date.now() which is always available and has 1 ms resolution.
-const monoNow: () => number =
-  typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? () => performance.now()
-    : () => Date.now();
-
-// ─── CPU load ─────────────────────────────────────────────────────────────────
-// Each loop busy-spins for BURST_MS milliseconds then re-schedules itself via
-// setTimeout(fn, 0).  All loops share the single JavaScript/Hermes thread —
-// they interleave as fast as the JS engine allows.
+// ─── Android native stress module ─────────────────────────────────────────────
+// On Android, CPU and memory stress run on native JVM threads via
+// KobitonCameraModule.  Each CPU thread occupies one physical core
+// (independent of the JS/Hermes thread), so 6 threads produce ~75% total
+// CPU on a Pixel 6 (8-core).  Memory is allocated as JVM ByteArrays with
+// a non-uniform XOR pattern that defeats zRAM compression.
 //
-// Kobiton's system metrics panel samples the OS-level process CPU.  To make
-// the spike visible on a multi-core device the JS thread needs to stay busy
-// as continuously as possible, so the burst window is set large (40 ms) and
-// the yield delay is 0 ms.  With N concurrent loops, each bursting 40 ms:
-//   effective JS-thread occupancy ≈ N×40 / (N×40 + 0) = ~100 % of one core
-// On a 6-core device this appears as ~16 % total CPU per loop (1÷6).
-// Six loops therefore show ~96 % total CPU — clearly visible in Kobiton.
+// Because work runs off the JS thread, the Stop button responds instantly.
+interface NativeStressModule {
+  startCpuStress(threadCount: number): Promise<number>;
+  stopCpuStress(): Promise<void>;
+  allocateNativeMemory(megabytes: number): Promise<number>;
+  releaseNativeMemory(): Promise<void>;
+}
+
+const AndroidStress: NativeStressModule | null =
+  Platform.OS === 'android'
+    ? (NativeModules.KobitonCameraModule as unknown as NativeStressModule)
+    : null;
+
+// ─── iOS JS fallback — CPU load ───────────────────────────────────────────────
+// On iOS (JavaScriptCore) there is no native stress module, so we keep the
+// JS busy-spin approach.  Each loop saturates the JS thread for BURST_MS
+// milliseconds then yields briefly so touch events (Stop button) can land.
 const BURST_MS = 40;
 let _cpuRunning = false;
 
 function startCPULoad(concurrency: number) {
   _cpuRunning = true;
+  const monoNow = typeof performance !== 'undefined' ? () => performance.now() : () => Date.now();
   for (let c = 0; c < concurrency; c++) {
     (function loop(seed: number) {
       if (!_cpuRunning) return;
@@ -65,9 +72,7 @@ function startCPULoad(concurrency: number) {
           + Math.cos(v * 0.7)
           + Math.atan2(v, 1.3);
       }
-      // setTimeout(fn, 0) — yield to the event loop so React can flush state
-      // updates and touch events, then immediately reschedule.
-      setTimeout(() => loop(v), 0);
+      setTimeout(() => loop(v), 16);
     })(c * 137.3 + 1);
   }
 }
@@ -76,69 +81,42 @@ function stopCPULoad() {
   _cpuRunning = false;
 }
 
-// ─── Memory pressure ──────────────────────────────────────────────────────────
-// Strategy: large Uint8Array blocks retained in a global array.
-//
-// On Hermes (Android), TypedArrays are backed by JNI DirectByteBuffers or
-// ART primitive arrays — both contribute to the process RSS that Kobiton's
-// system metrics graph tracks.
-//
-// Every page (4 096 bytes) is written with 0xFF at least once so the OS must
-// commit physical pages and the GC cannot reclaim them as zero-pages.
-//
-// A continuous thrash loop writes random positions across all blocks every
-// THRASH_INTERVAL_MS to keep pages hot (prevent the kernel from swapping or
-// marking them as cold / zRAM-compressed on Android).
-
+// ─── iOS JS fallback — memory pressure ────────────────────────────────────────
 const BYTES_PER_MB = 1024 * 1024;
-const THRASH_INTERVAL_MS = 20; // re-dirty pages every 20 ms
-const THRASH_DIRTY_RATIO = 0.05; // dirty ~5% of positions per block per interval
+const THRASH_INTERVAL_MS = 20;
+const THRASH_DIRTY_RATIO = 0.05;
 
 let _memBlocks: Uint8Array[] = [];
 let _thrashTimer: ReturnType<typeof setInterval> | null = null;
 let _memRunning = false;
 
-function yield_() {
-  return new Promise<void>((resolve) => setTimeout(resolve, 0));
-}
-
 async function allocateMemory(mb: number): Promise<void> {
   releaseMemory();
   _memRunning = true;
-
-  const CHUNK_MB    = 10;
-  const YIELD_EVERY = 5; // yield every 50 MB (5 chunks × 10 MB) to prevent GC reclaim
+  const CHUNK_MB    = 5;
+  const YIELD_EVERY = 2;
   const chunks      = Math.ceil(mb / CHUNK_MB);
-
   for (let i = 0; i < chunks; i++) {
     if (!_memRunning) return;
     const chunkMB  = Math.min(CHUNK_MB, mb - i * CHUNK_MB);
     const byteSize = chunkMB * BYTES_PER_MB;
     try {
       const block = new Uint8Array(byteSize);
-      // Write every byte with a non-uniform pattern to defeat zRAM compression.
       for (let p = 0; p < byteSize; p++) {
         block[p] = (p ^ 0xA5) & 0xFF;
       }
       _memBlocks.push(block);
     } catch (_) {
-      // Device OOM guard — stop allocating rather than crash.
       break;
     }
     if ((i + 1) % YIELD_EVERY === 0) {
-      await yield_();
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
     }
   }
-
   if (!_memRunning) return;
-  startMemoryThrash();
-}
-
-function startMemoryThrash() {
   if (_thrashTimer !== null) clearInterval(_thrashTimer);
   _thrashTimer = setInterval(() => {
     if (!_memRunning || _memBlocks.length === 0) return;
-    // Dirty ~5% of positions in each block to keep all pages hot and prevent compression.
     for (let b = 0; b < _memBlocks.length; b++) {
       const block = _memBlocks[b];
       const dirtyCount = Math.max(1, (block.length * THRASH_DIRTY_RATIO) | 0);
@@ -162,48 +140,82 @@ export default function SystemMetricsScreen() {
   const [loadLevel, setLoadLevel] = useState<LoadLevel>('medium');
   const [running, setRunning]     = useState(false);
   const [elapsed, setElapsed]     = useState(0);
+  const [allocating, setAllocating] = useState(false);
+  const [actualMemMB, setActualMemMB] = useState<number | null>(null);
   const timerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const startRef  = useRef(0);
+  const runIdRef  = useRef(0);
 
   useEffect(() => {
     return () => {
-      stopCPULoad();
-      releaseMemory();
+      runIdRef.current++;
+      if (AndroidStress) {
+        AndroidStress.stopCpuStress().catch(() => {});
+        AndroidStress.releaseNativeMemory().catch(() => {});
+      } else {
+        stopCPULoad();
+        releaseMemory();
+      }
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
 
   async function startLoad() {
-    const cfg = LOAD_CONFIG[loadLevel];
+    const cfg   = LOAD_CONFIG[loadLevel];
+    const runId = ++runIdRef.current;
+
     setElapsed(0);
+    setActualMemMB(null);
     setRunning(true);
-    _memRunning = true;
 
-    // Give React 200 ms to commit the running=true state change to the native
-    // UI so the Stop button becomes tappable before CPU loops start.
+    // Let React commit the running=true state so Stop button is visible.
     await new Promise<void>(resolve => setTimeout(resolve, 200));
-    if (!_memRunning) return;
+    if (runIdRef.current !== runId) return;
 
-    startCPULoad(cfg.concurrency);
+    if (AndroidStress) {
+      // ── Android: native JVM threads ──────────────────────────────────────
+      await AndroidStress.startCpuStress(cfg.concurrency);
+      if (runIdRef.current !== runId) return;
 
-    // Chunked allocation — yields between 10 MB chunks so touch events land.
-    await allocateMemory(cfg.memoryMB);
+      setAllocating(true);
+      const allocated = await AndroidStress.allocateNativeMemory(cfg.memoryMB);
+      setAllocating(false);
+      if (runIdRef.current !== runId) return;
 
-    if (!_memRunning) return;
-    startRef.current  = Date.now();
-    timerRef.current  = setInterval(() => {
+      setActualMemMB(allocated);
+    } else {
+      // ── iOS: JS busy-spin + TypedArray ───────────────────────────────────
+      _memRunning = true;
+      startCPULoad(cfg.concurrency);
+      await allocateMemory(cfg.memoryMB);
+      if (!_memRunning) return;
+    }
+
+    startRef.current = Date.now();
+    timerRef.current = setInterval(() => {
       setElapsed(Math.round((Date.now() - startRef.current) / 1000));
     }, 1000);
   }
 
   function stopLoad() {
-    stopCPULoad();
-    releaseMemory();
+    runIdRef.current++;
+    if (AndroidStress) {
+      AndroidStress.stopCpuStress().catch(() => {});
+      AndroidStress.releaseNativeMemory().catch(() => {});
+    } else {
+      stopCPULoad();
+      releaseMemory();
+    }
+    setAllocating(false);
+    setActualMemMB(null);
     setRunning(false);
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   }
 
   const cfg = LOAD_CONFIG[loadLevel];
+  const memLabel = actualMemMB !== null && actualMemMB < cfg.memoryMB
+    ? `${actualMemMB} MB allocated`
+    : cfg.memDesc + ' allocated';
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -243,7 +255,9 @@ export default function SystemMetricsScreen() {
             <View style={[styles.dot, { backgroundColor: running ? cfg.color : Colors.border }]} />
             <Text style={[styles.statusText, { color: running ? cfg.color : Colors.textMuted }]}>
               {running
-                ? `${cfg.label} stress test running — ${elapsed}s`
+                ? allocating
+                  ? `${cfg.label} stress — allocating memory…`
+                  : `${cfg.label} stress test running — ${elapsed}s`
                 : 'No load · device is idle'}
             </Text>
           </View>
@@ -254,8 +268,13 @@ export default function SystemMetricsScreen() {
                 <Text style={[styles.loadChipText, { color: cfg.color }]}>{cfg.cpuDesc} busy</Text>
               </View>
               <View style={styles.loadChip}>
-                <Feather name="database" size={11} color={cfg.color} />
-                <Text style={[styles.loadChipText, { color: cfg.color }]}>{cfg.memDesc} allocated</Text>
+                {allocating
+                  ? <ActivityIndicator size="small" color={cfg.color} style={{ marginRight: 2 }} />
+                  : <Feather name="database" size={11} color={cfg.color} />
+                }
+                <Text style={[styles.loadChipText, { color: cfg.color }]}>
+                  {allocating ? 'allocating…' : memLabel}
+                </Text>
               </View>
             </View>
           )}
@@ -406,7 +425,7 @@ const styles = StyleSheet.create({
     fontSize: Typography.sizeSm,
     fontFamily: Typography.fontSemiBold,
   },
-  loadDetails: { flexDirection: 'row', gap: 8 },
+  loadDetails: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   loadChip: {
     flexDirection: 'row',
     alignItems: 'center',
