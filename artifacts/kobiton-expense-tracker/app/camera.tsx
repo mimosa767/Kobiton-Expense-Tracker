@@ -103,29 +103,39 @@ function AndroidKobitonCamera() {
     // the hardware lock before KobitonCameraActivity claims it.
     await new Promise<void>(resolve => setTimeout(resolve, 350));
 
-    // ── Why the retry wrapper ─────────────────────────────────────────────────
-    // The RN bridge re-registers native module methods after a surface teardown.
-    // If a prior camera session just closed (SurfaceView destroyed ~300ms ago),
-    // the method reference can momentarily be undefined even when the module
-    // object itself is not null. One 600ms retry is enough for re-registration.
-    const callWithRetry = async <T,>(fn: () => Promise<T>): Promise<T> => {
-      try {
-        return await fn();
-      } catch (e: any) {
-        if (e?.message?.includes('undefined is not a function')) {
-          console.warn('[CameraScreen] module not ready, retrying in 600ms…');
-          await new Promise<void>(r => setTimeout(r, 600));
-          return fn();
-        }
-        throw e;
+    // ── Why we poll instead of a single retry ────────────────────────────────
+    // After KobitonCameraActivity returns (surface destroyed), the RN bridge
+    // re-registers native module methods asynchronously.  Kobiton log evidence:
+    //   Surface destroyed  15:25:52.338
+    //   retry warning      15:25:52.683  (345ms — old 600ms retry fired)
+    //   still TypeError    15:25:53.294  (956ms — method STILL not registered)
+    // The 600ms single retry was not long enough.  We now poll every 300ms for
+    // up to 3 000ms, checking whether the method reference is a callable
+    // function.  On a lightly loaded Pixel 6 this typically resolves in one or
+    // two 300ms ticks after the prior surface teardown settles.
+    const pollForMethod = async (getMethod: () => any, maxMs: number): Promise<boolean> => {
+      const deadline = Date.now() + maxMs;
+      while (Date.now() < deadline) {
+        if (typeof getMethod() === 'function') return true;
+        await new Promise<void>(r => setTimeout(r, 300));
       }
+      return typeof getMethod() === 'function'; // one final check at deadline
     };
+
+    const methodReady = await pollForMethod(() => mod.openCameraAutoCapture, 3000);
+    if (!methodReady) {
+      console.error('[CameraScreen] openCameraAutoCapture not available after 3s — aborting');
+      clearCameraCallback();
+      setCapturing(false);
+      router.back();
+      return;
+    }
 
     try {
       // openCameraAutoCapture: skips KobitonCameraActivity Phase 1 (standard
       // camera preview) and goes straight to Kobiton injection capture.
       // Returns the file:// URI of the captured JPEG.
-      const uri: string = await callWithRetry(() => mod.openCameraAutoCapture());
+      const uri: string = await mod.openCameraAutoCapture();
       console.log('[CameraScreen] openCameraAutoCapture resolved →', uri);
       const fileName = `receipt_${Date.now()}.jpg`;
       callCameraCallback(uri, fileName);

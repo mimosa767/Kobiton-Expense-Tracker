@@ -302,27 +302,67 @@ export default function SystemMetricsScreen() {
       // Counted in /proc/[pid]/smaps RSS — exactly what Kobiton System Metrics
       // reads.  JS Uint8Array lives in the Hermes heap and does NOT appear in
       // system RSS metrics, which is why JS memory was invisible before.
-      try {
-        await AndroidStress.startCpuStress(cfg.concurrency);
-      } catch (err) {
-        console.warn('[StressTest] startCpuStress failed, falling back to JS CPU:', err);
+
+      // ── Poll for native method availability before calling ───────────────────
+      //
+      // Kobiton log evidence (session 8545051):
+      //   startCpuStress TypeError    15:26:22.106
+      //   allocateNativeMemory Error  15:26:22.359
+      // Both fired immediately after KobitonCameraActivity returned from a
+      // prior camera capture (Activity lifecycle event clears bridge method
+      // refs until the module is re-registered — same root cause as Bug 1).
+      //
+      // We poll every 300ms for up to 2 000ms before each native call.  If the
+      // method isn't available by then we silently fall back to JS — no error
+      // log, no exception surface to the user.  This way the stress test always
+      // runs (JS fallback), and uses native if the module re-registers in time.
+
+      const pollForMethod = async (getMethod: () => any, maxMs: number): Promise<boolean> => {
+        const deadline = Date.now() + maxMs;
+        while (Date.now() < deadline) {
+          if (typeof getMethod() === 'function') return true;
+          await new Promise<void>(r => setTimeout(r, 300));
+        }
+        return typeof getMethod() === 'function';
+      };
+
+      // CPU: native JVM threads if available, JS setTimeout chains if not.
+      const cpuNativeReady = await pollForMethod(() => AndroidStress!.startCpuStress, 2000);
+      if (cpuNativeReady) {
+        try {
+          await AndroidStress.startCpuStress(cfg.concurrency);
+        } catch (err) {
+          console.warn('[StressTest] startCpuStress threw after poll, using JS CPU:', err);
+          startCPULoad(cfg.concurrency);
+        }
+      } else {
+        console.warn('[StressTest] startCpuStress not available after 2s — using JS CPU fallback');
         startCPULoad(cfg.concurrency);
       }
 
+      // Memory: native ByteBuffer if available, JS Uint8Array if not.
       setAllocating(true);
-      try {
-        const allocated = await AndroidStress.allocateNativeMemory(cfg.memoryMB);
-        setAllocating(false);
-        if (runIdRef.current !== runId) {
-          AndroidStress.stopCpuStress?.()?.catch?.(() => {});
-          return;
+      const memNativeReady = await pollForMethod(() => AndroidStress!.allocateNativeMemory, 2000);
+      if (memNativeReady) {
+        try {
+          const allocated = await AndroidStress.allocateNativeMemory(cfg.memoryMB);
+          setAllocating(false);
+          if (runIdRef.current !== runId) {
+            if (cpuNativeReady) AndroidStress.stopCpuStress?.()?.catch?.(() => {});
+            else stopCPULoad();
+            return;
+          }
+          setActualMemMB(allocated);
+          usedNative = true;
+        } catch (err) {
+          setAllocating(false);
+          console.warn('[StressTest] allocateNativeMemory threw after poll, falling back to JS memory:', err);
+          // CPU already running (native or JS). Fall through to JS memory path.
         }
-        setActualMemMB(allocated);
-        usedNative = true;
-      } catch (err) {
+      } else {
         setAllocating(false);
-        console.warn('[StressTest] Android native memory failed, falling back to JS memory:', err);
-        // CPU is already running (native or JS fallback above).
+        console.warn('[StressTest] allocateNativeMemory not available after 2s — using JS memory fallback');
+        // Fall through to JS memory path below.
       }
     }
 

@@ -158,28 +158,28 @@ export default function MediaGalleryScreen() {
 
       // Settle delay: CameraView surface teardown is async (~300ms).  The
       // PermissionsAndroid.request() above resolves almost instantly when
-      // already granted, leaving no time for the surface to release.  Without
-      // this pause the bridge can catch the module mid-teardown and throw
-      // "undefined is not a function" (seen at 14:13:43 in the Kobiton log,
-      // 341ms after "Surface destroyed at 14:13:43.602").
+      // already granted, leaving no time for the surface to release.
       await new Promise<void>(resolve => setTimeout(resolve, 350));
 
-      // One retry: if the surface finished tearing down but the bridge hasn't
-      // yet re-registered the method, wait 600ms and try once more.
-      const callWithRetry = async <T,>(fn: () => Promise<T>): Promise<T> => {
-        try {
-          return await fn();
-        } catch (e: any) {
-          if (e?.message?.includes('undefined is not a function')) {
-            console.warn('[QRScanner] module not ready, retrying in 600ms…');
-            await new Promise<void>(r => setTimeout(r, 600));
-            return fn();
-          }
-          throw e;
+      // Poll for the method instead of a single retry — log evidence shows the
+      // method is still unavailable at 956ms after surface teardown, so a single
+      // 600ms retry is not enough.  Poll every 300ms for up to 3 000ms.
+      const pollForMethod = async (getMethod: () => any, maxMs: number): Promise<boolean> => {
+        const deadline = Date.now() + maxMs;
+        while (Date.now() < deadline) {
+          if (typeof getMethod() === 'function') return true;
+          await new Promise<void>(r => setTimeout(r, 300));
         }
+        return typeof getMethod() === 'function';
       };
 
-      const uri: string = await callWithRetry(() => mod.openCamera());
+      const methodReady = await pollForMethod(() => mod.openCamera, 3000);
+      if (!methodReady) {
+        Alert.alert('Camera Not Ready', 'The camera module is still initializing. Please wait a moment and try again.');
+        return;
+      }
+
+      const uri: string = await mod.openCamera();
 
       // 3. Read the captured JPEG as base64, then run jsQR on its pixels.
       const b64 = await uriToBase64(uri);
