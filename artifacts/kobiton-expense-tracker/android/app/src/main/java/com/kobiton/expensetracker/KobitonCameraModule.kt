@@ -119,8 +119,25 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
             stopCpuStressInternal()
             cpuRunning = true
             for (i in 0 until threadCount) {
+                val seed = i * 137.3 + 1.0
                 val t = Thread {
-                    var v = i * 137.3 + 1.0
+                    // Elevate OS scheduling priority so the Android scheduler gives
+                    // this thread maximum CPU time, producing a visible spike in
+                    // Kobiton's System Metrics panel.
+                    //
+                    // THREAD_PRIORITY_URGENT_DISPLAY = –8  (Linux nice level).
+                    // Regular apps can set priorities down to –8 without special
+                    // permissions; system UI threads run at the same level.
+                    //
+                    // We also set Java priority to MAX_PRIORITY (10) so the JVM
+                    // scheduler aligns with the OS scheduler hint.
+                    try {
+                        android.os.Process.setThreadPriority(
+                            android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY
+                        )
+                    } catch (_: Exception) { /* ignore — non-fatal */ }
+
+                    var v = seed
                     while (cpuRunning && !Thread.currentThread().isInterrupted) {
                         v = Math.sqrt(Math.abs(v) + 1.1) * Math.PI +
                             Math.log(Math.abs(v) + 2.0) +
@@ -129,12 +146,13 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
                             Math.atan2(v, 1.3)
                     }
                 }
-                t.name = "kobiton-cpu-$i"
+                t.name     = "kobiton-cpu-$i"
                 t.isDaemon = true
+                t.priority = Thread.MAX_PRIORITY  // Java-level priority (1–10)
                 t.start()
                 cpuThreads.add(t)
             }
-            Log.d(TAG, "KobitonCameraModule: startCpuStress — $threadCount threads running")
+            Log.d(TAG, "KobitonCameraModule: startCpuStress — $threadCount threads at MAX_PRIORITY")
             promise.resolve(threadCount)
         } catch (e: Exception) {
             Log.e(TAG, "KobitonCameraModule: startCpuStress exception — ${e.message}", e)
@@ -185,50 +203,65 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
     private var thrashThread: Thread? = null
     private val memoryBuffers = java.util.concurrent.CopyOnWriteArrayList<ByteBuffer>()
 
-    // XOR pattern written across every byte during allocation.  Non-uniform
-    // values prevent the OS from deduplicating identical pages (KSM).
-    private val XOR_PATTERN: ByteArray = ByteArray(1024) { j -> ((j xor 0xA5) and 0xFF).toByte() }
+    // XOR fill pattern — 10 KB chunk to reduce JNI call overhead vs 1 KB.
+    // Non-uniform bytes prevent OS page deduplication (KSM) and defeat zRAM
+    // compression.  10 KB reduces put() calls by 10× vs the previous 1 KB chunk.
+    private val XOR_FILL: ByteArray = ByteArray(10 * 1024) { j -> ((j xor 0xA5) and 0xFF).toByte() }
 
     @ReactMethod
     fun allocateNativeMemory(megabytes: Int, promise: Promise) {
         try {
             releaseNativeMemoryInternal()
             memRunning = true
+
             val t = Thread {
-                var allocated = 0
+                var allocatedMB = 0
                 try {
-                    for (i in 0 until megabytes) {
+                    // Allocate in 10 MB chunks (30 mmap() calls for 300 MB instead of
+                    // 300).  Fewer system calls means allocation finishes ~10× faster,
+                    // so Kobiton sees the RSS spike sooner.
+                    val CHUNK_MB   = 10
+                    val chunkCount = (megabytes + CHUNK_MB - 1) / CHUNK_MB
+
+                    for (i in 0 until chunkCount) {
                         if (!memRunning || Thread.currentThread().isInterrupted) break
-                        // Allocate 1 MB of native (non-heap) memory.
-                        val buf = ByteBuffer.allocateDirect(1024 * 1024)
-                        // Write a non-uniform XOR pattern to every byte so that:
-                        //  a) Pages are physically committed (not lazy-allocated).
-                        //  b) zRAM cannot compress them (high entropy data).
-                        //  c) KSM cannot deduplicate them across buffers.
+                        val thisChunkMB = minOf(CHUNK_MB, megabytes - i * CHUNK_MB)
+                        val bytes       = thisChunkMB * 1024 * 1024
+
+                        // ByteBuffer.allocateDirect → native malloc (not JVM heap).
+                        // Counted in /proc/[pid]/smaps RSS — exactly what Kobiton
+                        // System Metrics reports.
+                        val buf = ByteBuffer.allocateDirect(bytes)
+
+                        // Fill every byte with a non-uniform XOR pattern:
+                        //  a) Forces physical page commitment (no lazy allocation).
+                        //  b) High entropy defeats zRAM / memory compression.
+                        //  c) Unique per-position values defeat KSM deduplication.
                         while (buf.hasRemaining()) {
-                            val chunk = minOf(XOR_PATTERN.size, buf.remaining())
-                            buf.put(XOR_PATTERN, 0, chunk)
+                            val chunk = minOf(XOR_FILL.size, buf.remaining())
+                            buf.put(XOR_FILL, 0, chunk)
                         }
                         buf.rewind()
                         memoryBuffers.add(buf)
-                        allocated++
+                        allocatedMB += thisChunkMB
                     }
                 } catch (e: OutOfMemoryError) {
-                    Log.w(TAG, "KobitonCameraModule: allocateNativeMemory — OOM after ${allocated}MB")
+                    Log.w(TAG, "KobitonCameraModule: allocateNativeMemory — OOM after ${allocatedMB} MB")
                 } catch (e: Exception) {
-                    Log.e(TAG, "KobitonCameraModule: allocateNativeMemory — error after ${allocated}MB: ${e.message}", e)
+                    Log.e(TAG, "KobitonCameraModule: allocateNativeMemory — error after ${allocatedMB} MB: ${e.message}", e)
                 }
-                Log.d(TAG, "KobitonCameraModule: allocateNativeMemory — allocated ${allocated}MB of ${megabytes}MB requested")
-                promise.resolve(allocated)
 
-                // Start the thrash loop after allocation to keep pages hot.
+                Log.d(TAG, "KobitonCameraModule: allocateNativeMemory — allocated ${allocatedMB} MB of ${megabytes} MB requested")
+                promise.resolve(allocatedMB)
+
+                // Start the page-level thrash loop to keep every page hot in RSS.
                 if (memRunning && memoryBuffers.isNotEmpty()) {
                     startMemoryThrash()
                 }
             }
-            t.name = "kobiton-mem-alloc"
+            t.name     = "kobiton-mem-alloc"
             t.isDaemon = true
-            memThread = t
+            memThread  = t
             t.start()
         } catch (e: Exception) {
             Log.e(TAG, "KobitonCameraModule: allocateNativeMemory exception — ${e.message}", e)

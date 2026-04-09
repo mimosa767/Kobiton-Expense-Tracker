@@ -31,18 +31,19 @@ const LOAD_CONFIG: Record<LoadLevel, {
 };
 
 // ─── Android native stress module ─────────────────────────────────────────────
-// On Android, CPU and memory stress run on native JVM threads via
-// KobitonCameraModule (NOT the JS/Hermes thread), so the Stop button is
-// always responsive.
 //
-// CPU: N daemon threads each running a floating-point math loop.  6 threads
-//      on a Pixel 6 (8-core) produces ~70% total CPU — confirmed in Kobiton.
+// On Android the CPU and memory stress run on native JVM threads via
+// KobitonCameraModule — completely independent of the JS/Hermes thread.
 //
-// Memory: ByteBuffer.allocateDirect() — native malloc(), not JVM heap — so
-//      there is no per-app heap cap.  A background thrash thread touches one
-//      byte per 4 KB page across every buffer every 100 ms, which is shorter
-//      than Android's zRAM compression window (~1–2 s under high pressure),
-//      keeping all allocated pages physically resident in RSS.
+// CPU:  N daemon threads each running a tight floating-point loop at
+//       THREAD_PRIORITY_URGENT_DISPLAY (nice -8) so the OS scheduler gives
+//       them maximum CPU time.  6 threads on a Pixel 6 (8-core) produces
+//       ~70 % total CPU — clearly visible in Kobiton's System Metrics panel.
+//
+// Memory: ByteBuffer.allocateDirect() (native malloc, not JVM heap).  A
+//       background thrash thread touches one byte per 4 KB page across every
+//       buffer every 100 ms, keeping all pages physically resident in RSS
+//       and defeating Android's zRAM compression.
 
 interface NativeStressModule {
   startCpuStress(threadCount: number): Promise<number>;
@@ -52,20 +53,26 @@ interface NativeStressModule {
 }
 
 const AndroidStress: NativeStressModule | null =
-  Platform.OS === 'android'
+  Platform.OS === 'android' && NativeModules.KobitonCameraModule
     ? (NativeModules.KobitonCameraModule as unknown as NativeStressModule)
     : null;
 
-// ─── iOS JS fallback — CPU load ───────────────────────────────────────────────
-// On iOS (JavaScriptCore) there is no native stress module, so we keep the
-// JS busy-spin approach.  Each loop saturates the JS thread for BURST_MS
-// milliseconds then yields briefly so touch events (Stop button) can land.
+// ─── JS CPU load (iOS, and Android fallback if native module unavailable) ─────
+//
+// Each chain saturates the JS thread for BURST_MS milliseconds then yields via
+// setTimeout so touch events (the Stop button) can still land.
+// On iOS (JavaScriptCore / Hermes) this is the primary CPU stress method and
+// produces visible CPU spikes in Kobiton's System Metrics panel.
+
 const BURST_MS = 40;
 let _cpuRunning = false;
 
 function startCPULoad(concurrency: number) {
   _cpuRunning = true;
-  const monoNow = typeof performance !== 'undefined' ? () => performance.now() : () => Date.now();
+  const monoNow = typeof performance !== 'undefined'
+    ? () => performance.now()
+    : () => Date.now();
+
   for (let c = 0; c < concurrency; c++) {
     (function loop(seed: number) {
       if (!_cpuRunning) return;
@@ -87,86 +94,101 @@ function stopCPULoad() {
   _cpuRunning = false;
 }
 
-// ─── iOS JS fallback — memory pressure ────────────────────────────────────────
+// ─── JS memory pressure (iOS, and Android fallback) ───────────────────────────
 //
-// WHY crypto.getRandomValues() instead of a byte-by-byte XOR loop:
-//   iOS uses lossless memory compression (similar to zRAM on Android).
-//   A uniform fill like 0xA5…0xA5 compresses to near-zero bytes, so the
-//   allocation appears to vanish from the OS RSS that Kobiton measures.
+// ALLOCATION:
+//   Each block is a 10 MB Uint8Array filled with non-compressible bytes so
+//   that iOS / Android memory compression cannot deduplicate or compress the
+//   pages back out of RSS.
 //
-//   crypto.getRandomValues() fills a TypedArray with cryptographically random
-//   bytes via a native C call — the same speed as memset but with
-//   cryptographic-quality entropy that NO compression algorithm can reduce.
-//   Pages filled this way stay fully resident in RSS for the life of the block.
+//   fillRandom() uses crypto.getRandomValues() (Hermes built-in, RN 0.71+).
+//   An XOR-shift fallback is used if crypto is unexpectedly unavailable.
 //
-//   crypto is available in React Native (Hermes) since RN 0.71; Expo SDK 54
-//   uses RN 0.76, so it is guaranteed to be present.
+// THRASH — why sequential page scan instead of random 25 % access:
 //
-// WHY larger chunks (10 MB) and less frequent yields (every 5 chunks):
-//   Yielding more often lets the JS GC reclaim earlier blocks before later
-//   blocks are allocated, understating the total held memory.  Fewer yields
-//   keeps all blocks live simultaneously, producing the full RSS spike in
-//   Kobiton's metrics.
+//   The previous design wrote to 25 % of every 10 MB block at random every
+//   20 ms.  For 300 MB that is:
+//     30 blocks × 2.5 MB random touches / 20 ms = 3.75 GB/s of memory bandwidth
+//   on the SINGLE JS thread.  This completely saturated the thread — the Stop
+//   button tap was queued but never executed, making the app appear to "crash."
 //
-// WHY aggressive thrash (every 20 ms, 25% of each block):
-//   iOS reclaims pages that haven't been accessed recently.  Dirtying 25%
-//   of every block every 20 ms keeps pages in the working set for the
-//   entire duration of the stress test.
+//   The fix: touch ONE BYTE PER 4 KB PAGE (sequential 4096-byte stride) every
+//   100 ms.  For 300 MB:
+//     (300 MB / 4 KB) = 76,800 byte writes  ≈  76 µs of work every 100 ms
+//   That is < 0.1 % of JS thread time, leaving it fully responsive to UI events
+//   while still keeping every memory page hot in the OS working set (preventing
+//   iOS/Android from swapping or compressing them away).
 
-const BYTES_PER_MB = 1024 * 1024;
-// crypto.getRandomValues() is capped at 65536 bytes per call.
-const CRYPTO_CHUNK = 65536;
-const THRASH_INTERVAL_MS  = 20;
-const THRASH_DIRTY_RATIO  = 0.25;   // 25% of each block per interval
+const BYTES_PER_MB    = 1024 * 1024;
+const CRYPTO_CHUNK    = 65536;      // max per getRandomValues() call
+const THRASH_INTERVAL = 100;        // ms between page sweeps (was 20ms)
+const PAGE_STRIDE     = 4096;       // touch one byte per 4 KB OS page
 
 let _memBlocks: Uint8Array[] = [];
 let _thrashTimer: ReturnType<typeof setInterval> | null = null;
 let _memRunning = false;
 
-/** Fill a Uint8Array with random bytes using crypto.getRandomValues(). */
+/** Fill a block with non-compressible bytes (crypto or XOR-shift fallback). */
 function fillRandom(block: Uint8Array): void {
-  for (let off = 0; off < block.length; off += CRYPTO_CHUNK) {
-    const slice = block.subarray(off, off + Math.min(CRYPTO_CHUNK, block.length - off));
-    crypto.getRandomValues(slice);
+  const hasCrypto =
+    typeof crypto !== 'undefined' &&
+    typeof (crypto as { getRandomValues?: unknown }).getRandomValues === 'function';
+
+  if (hasCrypto) {
+    for (let off = 0; off < block.length; off += CRYPTO_CHUNK) {
+      const slice = block.subarray(off, off + Math.min(CRYPTO_CHUNK, block.length - off));
+      crypto.getRandomValues(slice);
+    }
+  } else {
+    // XOR-shift32 — pseudo-random but not compressible.
+    let x = 0xDEADBEEF | 0;
+    for (let i = 0; i < block.length; i++) {
+      x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+      block[i] = x & 0xFF;
+    }
   }
 }
 
 async function allocateMemory(mb: number): Promise<void> {
   releaseMemory();
   _memRunning = true;
-  const CHUNK_MB    = 10;   // 10 MB per block — fewer, larger allocations
-  const YIELD_EVERY = 5;    // yield every 50 MB so GC can't reclaim early blocks
+
+  const CHUNK_MB    = 10;               // 10 MB per block
+  const YIELD_EVERY = 5;                // yield every 50 MB
   const chunks      = Math.ceil(mb / CHUNK_MB);
+
   for (let i = 0; i < chunks; i++) {
     if (!_memRunning) return;
     const chunkMB  = Math.min(CHUNK_MB, mb - i * CHUNK_MB);
     const byteSize = chunkMB * BYTES_PER_MB;
     try {
       const block = new Uint8Array(byteSize);
-      // Fill with cryptographically random bytes — defeats iOS memory compression.
       fillRandom(block);
       _memBlocks.push(block);
     } catch (_) {
-      break;
+      break;  // OOM or crypto error — stop gracefully
     }
     if ((i + 1) % YIELD_EVERY === 0) {
+      // Yield to JS event loop so GC can't decide to reclaim all earlier blocks.
       await new Promise<void>(resolve => setTimeout(resolve, 0));
     }
   }
+
   if (!_memRunning) return;
+
+  // Start lightweight page-level thrash.
   if (_thrashTimer !== null) clearInterval(_thrashTimer);
   _thrashTimer = setInterval(() => {
     if (!_memRunning || _memBlocks.length === 0) return;
+    // Sequential page scan: one write per 4 KB page keeps pages hot without
+    // saturating the JS thread (< 0.1 % CPU for 300 MB at 100 ms interval).
     for (let b = 0; b < _memBlocks.length; b++) {
-      const block = _memBlocks[b];
-      // Touch 25% of each block — keeps pages hot in the iOS working set.
-      const dirtyCount = Math.max(1, (block.length * THRASH_DIRTY_RATIO) | 0);
-      for (let d = 0; d < dirtyCount; d++) {
-        const pos  = (block.length * Math.random()) | 0;
-        block[pos] = (block[pos] ^ 0xA5) & 0xff;
+      const blk = _memBlocks[b];
+      for (let pos = 0; pos < blk.length; pos += PAGE_STRIDE) {
+        blk[pos] ^= 0xA5;
       }
     }
-  }, THRASH_INTERVAL_MS);
+  }, THRASH_INTERVAL);
 }
 
 function releaseMemory() {
@@ -190,16 +212,23 @@ export default function SystemMetricsScreen() {
   useEffect(() => {
     return () => {
       runIdRef.current++;
-      if (AndroidStress) {
-        AndroidStress.stopCpuStress().catch(() => {});
-        AndroidStress.releaseNativeMemory().catch(() => {});
-      } else {
-        stopCPULoad();
-        releaseMemory();
-      }
+      safeStopAll();
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
+
+  /** Stop everything safely — native + JS, never throws. */
+  function safeStopAll() {
+    // Always run JS cleanup (covers fallback path and iOS).
+    try { stopCPULoad(); } catch (_) {}
+    try { releaseMemory(); } catch (_) {}
+    // Android native cleanup (fire-and-forget; optional chaining guards against
+    // undefined if the native module is not yet fully initialised).
+    if (AndroidStress) {
+      try { AndroidStress.stopCpuStress?.()?.catch?.(() => {}); } catch (_) {}
+      try { AndroidStress.releaseNativeMemory?.()?.catch?.(() => {}); } catch (_) {}
+    }
+  }
 
   async function startLoad() {
     const cfg   = LOAD_CONFIG[loadLevel];
@@ -209,27 +238,42 @@ export default function SystemMetricsScreen() {
     setActualMemMB(null);
     setRunning(true);
 
-    // Let React commit the running=true state so Stop button is visible.
+    // Let React commit running=true so the Stop button renders before we
+    // block the JS thread with the first burst.
     await new Promise<void>(resolve => setTimeout(resolve, 200));
     if (runIdRef.current !== runId) return;
 
+    let usedNative = false;
+
     if (AndroidStress) {
-      // ── Android: native JVM threads ──────────────────────────────────────
-      await AndroidStress.startCpuStress(cfg.concurrency);
-      if (runIdRef.current !== runId) return;
+      // ── Android: native JVM threads ────────────────────────────────────────
+      // Native CPU threads run at THREAD_PRIORITY_URGENT_DISPLAY (nice –8) on
+      // independent OS cores — the JS thread stays free so the Stop button is
+      // always responsive.
+      try {
+        await AndroidStress.startCpuStress(cfg.concurrency);
+        if (runIdRef.current !== runId) return;
 
-      setAllocating(true);
-      const allocated = await AndroidStress.allocateNativeMemory(cfg.memoryMB);
-      setAllocating(false);
-      if (runIdRef.current !== runId) return;
+        setAllocating(true);
+        const allocated = await AndroidStress.allocateNativeMemory(cfg.memoryMB);
+        setAllocating(false);
+        if (runIdRef.current !== runId) return;
 
-      setActualMemMB(allocated);
-    } else {
-      // ── iOS: JS busy-spin + TypedArray ───────────────────────────────────
+        setActualMemMB(allocated);
+        usedNative = true;
+      } catch (err) {
+        // Native module call failed — fall through to JS fallback below.
+        console.warn('[StressTest] Android native stress failed, using JS fallback:', err);
+        setAllocating(false);
+      }
+    }
+
+    if (!usedNative) {
+      // ── JS fallback (iOS primary path; Android if native module unavailable) ─
       _memRunning = true;
       startCPULoad(cfg.concurrency);
       await allocateMemory(cfg.memoryMB);
-      if (!_memRunning) return;
+      if (!_memRunning) return; // stopped while allocating
     }
 
     startRef.current = Date.now();
@@ -240,13 +284,7 @@ export default function SystemMetricsScreen() {
 
   function stopLoad() {
     runIdRef.current++;
-    if (AndroidStress) {
-      AndroidStress.stopCpuStress().catch(() => {});
-      AndroidStress.releaseNativeMemory().catch(() => {});
-    } else {
-      stopCPULoad();
-      releaseMemory();
-    }
+    safeStopAll();
     setAllocating(false);
     setActualMemMB(null);
     setRunning(false);
