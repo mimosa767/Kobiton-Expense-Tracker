@@ -91,8 +91,8 @@ function stopCPULoad() {
 // marking them as cold / zRAM-compressed on Android).
 
 const BYTES_PER_MB = 1024 * 1024;
-const PAGE_SIZE    = 4096;
 const THRASH_INTERVAL_MS = 20; // re-dirty pages every 20 ms
+const THRASH_DIRTY_RATIO = 0.05; // dirty ~5% of positions per block per interval
 
 let _memBlocks: Uint8Array[] = [];
 let _thrashTimer: ReturnType<typeof setInterval> | null = null;
@@ -106,8 +106,9 @@ async function allocateMemory(mb: number): Promise<void> {
   releaseMemory();
   _memRunning = true;
 
-  const CHUNK_MB = 10;
-  const chunks   = Math.ceil(mb / CHUNK_MB);
+  const CHUNK_MB    = 10;
+  const YIELD_EVERY = 5; // yield every 50 MB (5 chunks × 10 MB) to prevent GC reclaim
+  const chunks      = Math.ceil(mb / CHUNK_MB);
 
   for (let i = 0; i < chunks; i++) {
     if (!_memRunning) return;
@@ -115,16 +116,18 @@ async function allocateMemory(mb: number): Promise<void> {
     const byteSize = chunkMB * BYTES_PER_MB;
     try {
       const block = new Uint8Array(byteSize);
-      // Touch every page to force OS physical-page commit.
-      for (let p = 0; p < byteSize; p += PAGE_SIZE) {
-        block[p] = 0xff;
+      // Write every byte with a non-uniform pattern to defeat zRAM compression.
+      for (let p = 0; p < byteSize; p++) {
+        block[p] = (p ^ 0xA5) & 0xFF;
       }
       _memBlocks.push(block);
     } catch (_) {
       // Device OOM guard — stop allocating rather than crash.
       break;
     }
-    await yield_();
+    if ((i + 1) % YIELD_EVERY === 0) {
+      await yield_();
+    }
   }
 
   if (!_memRunning) return;
@@ -135,11 +138,14 @@ function startMemoryThrash() {
   if (_thrashTimer !== null) clearInterval(_thrashTimer);
   _thrashTimer = setInterval(() => {
     if (!_memRunning || _memBlocks.length === 0) return;
-    // Dirty a random byte in each block to keep all pages warm in RAM.
+    // Dirty ~5% of positions in each block to keep all pages hot and prevent compression.
     for (let b = 0; b < _memBlocks.length; b++) {
       const block = _memBlocks[b];
-      const pos   = ((block.length - 1) * Math.random()) | 0;
-      block[pos]  = (block[pos] + 1) & 0xff;
+      const dirtyCount = Math.max(1, (block.length * THRASH_DIRTY_RATIO) | 0);
+      for (let d = 0; d < dirtyCount; d++) {
+        const pos  = (block.length * Math.random()) | 0;
+        block[pos] = (block[pos] ^ 0xA5) & 0xff;
+      }
     }
   }, THRASH_INTERVAL_MS);
 }

@@ -287,18 +287,6 @@ export default function LocationMockScreen() {
           </View>
         ))}
 
-        {/* Note about auto-injection */}
-        <View style={styles.infoBox}>
-          <MaterialCommunityIcons name="information-outline" size={16} color={Colors.accent} />
-          <Text style={styles.infoText}>
-            <Text style={styles.infoHighlight}>Tip: </Text>
-            Coordinates shown may reflect a location injected in a{' '}
-            <Text style={styles.infoHighlight}>previous Kobiton session</Text>
-            {' '}— injections persist on the device until overwritten. To see your current injection, set the coordinates in the Kobiton platform and tap{' '}
-            <Text style={styles.infoHighlight}>Refresh</Text>.
-          </Text>
-        </View>
-
         {/* How it works */}
         <Text style={styles.sectionTitle}>HOW LOCATION INJECTION WORKS</Text>
 
@@ -338,7 +326,7 @@ export default function LocationMockScreen() {
             <View style={styles.stepContent}>
               <Text style={styles.stepTitle}>Verify the injected coordinates appear here</Text>
               <Text style={styles.stepDesc}>
-                After Kobiton injects coordinates, tap Refresh. The latitude and longitude shown here should match exactly what was configured in the platform — confirming that GPS injection is working correctly for your app.
+                After Kobiton injects coordinates, the latitude and longitude shown here will update automatically — confirming that GPS injection is working correctly for your app.
               </Text>
             </View>
           </View>
