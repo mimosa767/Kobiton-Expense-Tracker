@@ -3,6 +3,7 @@ package com.kobiton.expensetracker
 import android.app.Activity
 import android.content.Intent
 import android.util.Log
+import java.nio.ByteBuffer
 
 import com.facebook.react.bridge.ActivityEventListener
 import com.facebook.react.bridge.BaseActivityEventListener
@@ -103,105 +104,200 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
 
     // ─── CPU stress ───────────────────────────────────────────────────────────
     //
-    // Spawns N native JVM threads that each run a tight floating-point math
-    // loop.  Each thread occupies one physical CPU core independently of the
-    // JavaScript/Hermes thread.  On a Pixel 6 (8-core CPU), 6 threads produce
-    // ~75% total CPU load — clearly visible in Kobiton's System Metrics panel.
-    //
-    // The JS thread is NOT involved and stays free for UI events (Stop button
-    // responds instantly).
+    // Spawns N native JVM daemon threads, each running a tight floating-point
+    // math loop.  Each thread occupies one physical CPU core independently of
+    // the JavaScript/Hermes thread.  On a Pixel 6 (8-core CPU) 6 threads
+    // produce ~70% total CPU load — clearly visible in Kobiton's System Metrics
+    // panel.  The JS thread stays free so the Stop button responds instantly.
 
     @Volatile private var cpuRunning = false
     private val cpuThreads = java.util.concurrent.CopyOnWriteArrayList<Thread>()
 
     @ReactMethod
     fun startCpuStress(threadCount: Int, promise: Promise) {
-        stopCpuStressInternal()
-        cpuRunning = true
-        for (i in 0 until threadCount) {
-            val t = Thread {
-                var v = i * 137.3 + 1.0
-                while (cpuRunning && !Thread.currentThread().isInterrupted) {
-                    v = Math.sqrt(Math.abs(v) + 1.1) * Math.PI +
-                        Math.log(Math.abs(v) + 2.0) +
-                        Math.sin(v) +
-                        Math.cos(v * 0.7) +
-                        Math.atan2(v, 1.3)
+        try {
+            stopCpuStressInternal()
+            cpuRunning = true
+            for (i in 0 until threadCount) {
+                val t = Thread {
+                    var v = i * 137.3 + 1.0
+                    while (cpuRunning && !Thread.currentThread().isInterrupted) {
+                        v = Math.sqrt(Math.abs(v) + 1.1) * Math.PI +
+                            Math.log(Math.abs(v) + 2.0) +
+                            Math.sin(v) +
+                            Math.cos(v * 0.7) +
+                            Math.atan2(v, 1.3)
+                    }
                 }
+                t.name = "kobiton-cpu-$i"
+                t.isDaemon = true
+                t.start()
+                cpuThreads.add(t)
             }
-            t.name = "kobiton-cpu-$i"
-            t.isDaemon = true
-            t.start()
-            cpuThreads.add(t)
+            Log.d(TAG, "KobitonCameraModule: startCpuStress — $threadCount threads running")
+            promise.resolve(threadCount)
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraModule: startCpuStress exception — ${e.message}", e)
+            promise.reject("E_STRESS_ERROR", e.message ?: "Unknown error starting CPU stress")
         }
-        Log.d(TAG, "KobitonCameraModule: startCpuStress — $threadCount threads running")
-        promise.resolve(threadCount)
     }
 
     @ReactMethod
     fun stopCpuStress(promise: Promise) {
-        stopCpuStressInternal()
-        Log.d(TAG, "KobitonCameraModule: stopCpuStress — all threads stopped")
-        promise.resolve(null)
+        try {
+            stopCpuStressInternal()
+            Log.d(TAG, "KobitonCameraModule: stopCpuStress — all threads stopped")
+            promise.resolve(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraModule: stopCpuStress exception — ${e.message}", e)
+            promise.resolve(null)   // resolve anyway so JS doesn't hang
+        }
     }
 
     private fun stopCpuStressInternal() {
         cpuRunning = false
-        cpuThreads.forEach { it.interrupt() }
+        try { cpuThreads.forEach { it.interrupt() } } catch (_: Exception) {}
         cpuThreads.clear()
     }
 
     // ─── Memory stress ────────────────────────────────────────────────────────
     //
-    // Allocates 1 MB native JVM byte-arrays on a background thread, writing
-    // every byte with a non-uniform XOR pattern to defeat zRAM compression.
-    // References are retained in memoryBlocks so the GC cannot reclaim them.
-    // Allocation runs off the JS thread so the Stop button stays responsive.
+    // WHY ByteBuffer.allocateDirect() instead of ByteArray:
+    //   ByteArray allocates on the JVM heap, which Android caps per-app at
+    //   ~512 MB.  On a Pixel 6 at 95% memory utilisation the heap is already
+    //   near its limit — so only a few MB are allocated before OOM, causing the
+    //   JVM to throw an error that can crash the process.
     //
-    // Returns the number of MB actually allocated (may be less than requested
-    // if the device runs out of memory).
+    //   ByteBuffer.allocateDirect() allocates from native (non-heap) memory via
+    //   malloc(), subject only to the physical RAM limit.  This memory IS
+    //   counted in the process RSS — exactly what Kobiton's System Metrics panel
+    //   measures — so a 300 MB allocation produces a visible spike.
+    //
+    // WHY a separate thrash thread:
+    //   Android's zRAM subsystem compresses pages that have not been accessed
+    //   recently, making them invisible to RSS metrics.  The thrash thread
+    //   writes one non-uniform byte per buffer every 20 ms, keeping all pages
+    //   physically resident and defeating zRAM compression.
 
     @Volatile private var memRunning = false
     private var memThread: Thread? = null
-    private val memoryBlocks = java.util.concurrent.CopyOnWriteArrayList<ByteArray>()
+    private var thrashThread: Thread? = null
+    private val memoryBuffers = java.util.concurrent.CopyOnWriteArrayList<ByteBuffer>()
+
+    // XOR pattern written across every byte during allocation.  Non-uniform
+    // values prevent the OS from deduplicating identical pages (KSM).
+    private val XOR_PATTERN: ByteArray = ByteArray(1024) { j -> ((j xor 0xA5) and 0xFF).toByte() }
 
     @ReactMethod
     fun allocateNativeMemory(megabytes: Int, promise: Promise) {
-        releaseNativeMemoryInternal()
-        memRunning = true
-        val t = Thread {
-            var allocated = 0
-            try {
-                for (i in 0 until megabytes) {
-                    if (!memRunning || Thread.currentThread().isInterrupted) break
-                    val block = ByteArray(1024 * 1024) { j -> ((j xor 0xA5) and 0xFF).toByte() }
-                    memoryBlocks.add(block)
-                    allocated++
+        try {
+            releaseNativeMemoryInternal()
+            memRunning = true
+            val t = Thread {
+                var allocated = 0
+                try {
+                    for (i in 0 until megabytes) {
+                        if (!memRunning || Thread.currentThread().isInterrupted) break
+                        // Allocate 1 MB of native (non-heap) memory.
+                        val buf = ByteBuffer.allocateDirect(1024 * 1024)
+                        // Write a non-uniform XOR pattern to every byte so that:
+                        //  a) Pages are physically committed (not lazy-allocated).
+                        //  b) zRAM cannot compress them (high entropy data).
+                        //  c) KSM cannot deduplicate them across buffers.
+                        while (buf.hasRemaining()) {
+                            val chunk = minOf(XOR_PATTERN.size, buf.remaining())
+                            buf.put(XOR_PATTERN, 0, chunk)
+                        }
+                        buf.rewind()
+                        memoryBuffers.add(buf)
+                        allocated++
+                    }
+                } catch (e: OutOfMemoryError) {
+                    Log.w(TAG, "KobitonCameraModule: allocateNativeMemory — OOM after ${allocated}MB")
+                } catch (e: Exception) {
+                    Log.e(TAG, "KobitonCameraModule: allocateNativeMemory — error after ${allocated}MB: ${e.message}", e)
                 }
-            } catch (e: OutOfMemoryError) {
-                Log.w(TAG, "KobitonCameraModule: allocateNativeMemory — OOM after ${allocated}MB")
+                Log.d(TAG, "KobitonCameraModule: allocateNativeMemory — allocated ${allocated}MB of ${megabytes}MB requested")
+                promise.resolve(allocated)
+
+                // Start the thrash loop after allocation to keep pages hot.
+                if (memRunning && memoryBuffers.isNotEmpty()) {
+                    startMemoryThrash()
+                }
             }
-            Log.d(TAG, "KobitonCameraModule: allocateNativeMemory — allocated ${allocated}MB of ${megabytes}MB requested")
-            promise.resolve(allocated)
+            t.name = "kobiton-mem-alloc"
+            t.isDaemon = true
+            memThread = t
+            t.start()
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraModule: allocateNativeMemory exception — ${e.message}", e)
+            promise.reject("E_MEM_ERROR", e.message ?: "Unknown error allocating memory")
         }
-        t.name = "kobiton-mem-alloc"
-        t.isDaemon = true
-        memThread = t
-        t.start()
     }
 
     @ReactMethod
     fun releaseNativeMemory(promise: Promise) {
-        releaseNativeMemoryInternal()
-        Log.d(TAG, "KobitonCameraModule: releaseNativeMemory — memory freed")
-        promise.resolve(null)
+        try {
+            releaseNativeMemoryInternal()
+            Log.d(TAG, "KobitonCameraModule: releaseNativeMemory — memory freed")
+            promise.resolve(null)
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraModule: releaseNativeMemory exception — ${e.message}", e)
+            promise.resolve(null)   // resolve anyway so JS doesn't hang
+        }
     }
 
     private fun releaseNativeMemoryInternal() {
         memRunning = false
-        memThread?.interrupt()
-        memThread = null
-        memoryBlocks.clear()
+        try { thrashThread?.interrupt() } catch (_: Exception) {}
+        try { memThread?.interrupt()    } catch (_: Exception) {}
+        thrashThread = null
+        memThread    = null
+        memoryBuffers.clear()
+        // Suggest a GC so the ByteBuffer finalizers run and native memory is
+        // returned to the OS promptly (DirectByteBuffers are freed via GC
+        // finalizers on Android).
         System.gc()
+    }
+
+    // ─── Memory thrash loop ───────────────────────────────────────────────────
+    //
+    // Runs on a dedicated daemon thread.  Every 20 ms it writes one XOR byte
+    // into a pseudo-random position in each allocated buffer.  This:
+    //   • Keeps pages in the CPU's L2/L3 cache and the OS working set.
+    //   • Prevents zRAM from compressing pages that haven't been touched.
+    //   • Ensures the RSS metric Kobiton records stays elevated for the full
+    //     duration of the stress test.
+
+    private fun startMemoryThrash() {
+        thrashThread?.interrupt()
+        val tt = Thread {
+            var cycle = 0
+            while (memRunning && !Thread.currentThread().isInterrupted) {
+                try {
+                    for (buf in memoryBuffers) {
+                        if (!memRunning || Thread.currentThread().isInterrupted) break
+                        val cap = buf.capacity()
+                        if (cap < 2) continue
+                        // Touch a position that shifts every cycle so different
+                        // pages are accessed across iterations.
+                        val pos = (cycle * 4096 + 512) % (cap - 1)
+                        buf.put(pos, (buf.get(pos).toInt() xor 0xA5).toByte())
+                    }
+                    cycle++
+                    Thread.sleep(20)
+                } catch (e: InterruptedException) {
+                    break
+                } catch (e: Exception) {
+                    Log.w(TAG, "KobitonCameraModule: thrash loop error — ${e.message}")
+                    // continue thrashing despite transient errors
+                }
+            }
+            Log.d(TAG, "KobitonCameraModule: memory thrash loop ended")
+        }
+        tt.name = "kobiton-mem-thrash"
+        tt.isDaemon = true
+        thrashThread = tt
+        tt.start()
     }
 }
