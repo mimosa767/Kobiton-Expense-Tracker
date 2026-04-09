@@ -196,18 +196,30 @@ export default function MediaGalleryScreen() {
   //
   // SOLUTION — mirrors Android's KobitonCameraModule exactly:
   //   1. Unmount CameraView so expo-camera releases the AVCaptureSession lock.
-  //   2. KobitonCaptureModule opens its OWN AVCaptureSession + AVCaptureVideoDataOutput.
+  //   2. Wait 600 ms for the AVCaptureSession to FULLY tear down.
+  //      WITHOUT this delay, KobitonCaptureModule.captureFrame() opens a new
+  //      AVCaptureVideoDataOutput session while expo-camera's session is still
+  //      being torn down.  When Kobiton injects a frame it delivers it to BOTH
+  //      sessions simultaneously, causing a native crash on iOS.
+  //   3. KobitonCaptureModule opens its OWN AVCaptureSession + AVCaptureVideoDataOutput.
   //      Kobiton swizzles EVERY AVCaptureVideoDataOutput delegate, so injected
   //      frames will arrive in our new output too.
-  //   3. After 1 500 ms (injection settle time), arm the capture and grab the
+  //   4. After 1 500 ms (injection settle time), arm the capture and grab the
   //      next sample buffer → JPEG → base64.
-  //   4. Run jsQR on the JPEG bytes.
-  //   5. Re-mount CameraView.
+  //   5. Run jsQR on the JPEG bytes.
+  //   6. Re-mount CameraView.
   async function captureAndDecodeIOS() {
     if (isCapturing) return;
     setIsCapturing(true);
     // Step 1: unmount CameraView to free the AVCaptureSession hardware lock
     setCameraVisible(false);
+
+    // Step 2: wait for AVCaptureSession to fully tear down before opening a new one.
+    // This prevents the "two sessions active simultaneously" crash when Kobiton
+    // injects a frame and it lands in both the dying expo-camera session AND our
+    // new KobitonCaptureModule session at the same instant.
+    await new Promise<void>(resolve => setTimeout(resolve, 600));
+
     try {
       const mod = NativeModules.KobitonCaptureModule;
       if (!mod) {
@@ -216,12 +228,12 @@ export default function MediaGalleryScreen() {
         );
       }
 
-      // Step 2: open our own AVCaptureVideoDataOutput session.
+      // Step 3: open our own AVCaptureVideoDataOutput session.
       // 1 500 ms delay gives Kobiton time to start injecting into the output.
       const b64: string = await mod.captureFrame(1500);
       if (!b64) throw new Error('captureFrame returned empty base64 data');
 
-      // Step 3: decode the JPEG with jsQR
+      // Step 4: decode the JPEG with jsQR
       const qrData = await decodeQRFromBase64(b64);
       if (qrData) {
         setScannedResult({ type: 'qr', data: qrData });

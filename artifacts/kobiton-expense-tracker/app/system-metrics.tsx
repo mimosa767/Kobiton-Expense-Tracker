@@ -32,24 +32,29 @@ const LOAD_CONFIG: Record<LoadLevel, {
 
 // ─── Android native stress module ─────────────────────────────────────────────
 //
-// On Android the CPU and memory stress run on native JVM threads via
-// KobitonCameraModule — completely independent of the JS/Hermes thread.
-//
-// CPU:  N daemon threads each running a tight floating-point loop at
-//       NORM_PRIORITY (nice 0 = same as the Android UI thread).  Multiple
-//       threads on separate physical cores produce ~70 % total CPU on a Pixel 6
-//       (8-core) — clearly visible in Kobiton's System Metrics panel.
-//       Running at nice 0 (NOT nice -8) ensures the RN bridge thread is never
-//       starved, keeping the Stop button instantly responsive.
+// On Android we use native ByteBuffer.allocateDirect() for MEMORY stress only.
 //
 // Memory: ByteBuffer.allocateDirect() (native malloc, not JVM heap).  A
 //       background thrash thread touches one byte per 4 KB page across every
 //       buffer every 100 ms, keeping all pages physically resident in RSS
 //       and defeating Android's zRAM compression.
+//
+// CPU: We deliberately use the SAME JS setTimeout-chain approach as iOS (see
+//      startCPULoad below) rather than the native startCpuStress JVM threads.
+//
+//      WHY NOT native JVM threads for CPU:
+//        At NORM_PRIORITY (nice 0) six native threads each peg a physical core.
+//        On a Pixel 6 (8-core) with all cores busy, even nice-0 threads compete
+//        with the RN bridge thread for scheduler time — under heavy load the
+//        bridge queue can back up 50–200 ms, making the Stop button feel sluggish.
+//
+//      WHY JS CPU works well enough:
+//        Each JS chain runs 40 ms bursts then yields via setTimeout(fn, 16).
+//        One Hermes thread generates ~100 % of a single core — clearly visible
+//        in Kobiton's System Metrics panel.  Because the chain yields every
+//        40 ms, the Stop button always gets a turn within one burst.
 
 interface NativeStressModule {
-  startCpuStress(threadCount: number): Promise<number>;
-  stopCpuStress(): Promise<void>;
   allocateNativeMemory(megabytes: number): Promise<number>;
   releaseNativeMemory(): Promise<void>;
 }
@@ -235,13 +240,11 @@ export default function SystemMetricsScreen() {
 
   /** Stop everything safely — native + JS, never throws. */
   function safeStopAll() {
-    // Always run JS cleanup (covers fallback path and iOS).
+    // JS CPU and memory cleanup (iOS primary path; also runs on Android).
     try { stopCPULoad(); } catch (_) {}
     try { releaseMemory(); } catch (_) {}
-    // Android native cleanup (fire-and-forget; optional chaining guards against
-    // undefined if the native module is not yet fully initialised).
+    // Android: release native memory only (CPU is handled by JS stopCPULoad above).
     if (AndroidStress) {
-      try { AndroidStress.stopCpuStress?.()?.catch?.(() => {}); } catch (_) {}
       try { AndroidStress.releaseNativeMemory?.()?.catch?.(() => {}); } catch (_) {}
     }
   }
@@ -262,34 +265,41 @@ export default function SystemMetricsScreen() {
     let usedNative = false;
 
     if (AndroidStress) {
-      // ── Android: native JVM threads ────────────────────────────────────────
-      // Native CPU threads run at NORM_PRIORITY (nice 0) on independent OS
-      // cores — same priority as the UI/bridge thread so neither starves,
-      // and the Stop button always responds within 1-2 ms.
-      try {
-        await AndroidStress.startCpuStress(cfg.concurrency);
-        if (runIdRef.current !== runId) return;
+      // ── Android: JS CPU + native memory ────────────────────────────────────
+      //
+      // CPU uses the same JS setTimeout-chain as iOS (see startCPULoad).
+      // This guarantees the Stop button always responds; native threads at
+      // NORM_PRIORITY can still back up the RN bridge under peak load.
+      //
+      // Memory uses native ByteBuffer.allocateDirect() — the only way to
+      // allocate hundreds of MB outside the JVM heap and have it counted in
+      // the OS RSS metric that Kobiton's System Metrics panel reads.
+      startCPULoad(cfg.concurrency);
 
-        setAllocating(true);
+      setAllocating(true);
+      try {
         const allocated = await AndroidStress.allocateNativeMemory(cfg.memoryMB);
         setAllocating(false);
-        if (runIdRef.current !== runId) return;
-
+        if (runIdRef.current !== runId) { stopCPULoad(); return; }
         setActualMemMB(allocated);
         usedNative = true;
       } catch (err) {
-        // Native module call failed — fall through to JS fallback below.
-        console.warn('[StressTest] Android native stress failed, using JS fallback:', err);
         setAllocating(false);
+        console.warn('[StressTest] Android native memory failed, falling back to JS memory:', err);
+        // CPU is already running (startCPULoad above); fall through to JS memory.
       }
     }
 
     if (!usedNative) {
-      // ── JS fallback (iOS primary path; Android if native module unavailable) ─
+      // ── JS path: iOS primary; Android if native module unavailable ───────────
       _memRunning = true;
-      startCPULoad(cfg.concurrency);
+      if (!AndroidStress) {
+        // Android with startCPULoad already called above when AndroidStress!=null;
+        // only call here for pure-JS platforms (iOS) or missing native module.
+        startCPULoad(cfg.concurrency);
+      }
       await allocateMemory(cfg.memoryMB);
-      if (!_memRunning) return; // stopped while allocating
+      if (!_memRunning) return;
     }
 
     startRef.current = Date.now();

@@ -19,6 +19,7 @@ import com.facebook.react.bridge.ReactMethod
  *
  * JS-side:
  *   NativeModules.KobitonCameraModule.openCamera()               → Promise<string>
+ *   NativeModules.KobitonCameraModule.openCameraAutoCapture()    → Promise<string>
  *   NativeModules.KobitonCameraModule.startCpuStress(n)          → Promise<number>  (threads started)
  *   NativeModules.KobitonCameraModule.stopCpuStress()            → Promise<void>
  *   NativeModules.KobitonCameraModule.allocateNativeMemory(mb)   → Promise<number>  (MB actually allocated)
@@ -85,18 +86,35 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun openCamera(promise: Promise) {
+        launchCamera(autoCapture = false, promise = promise)
+    }
+
+    /**
+     * Like openCamera() but sets EXTRA_AUTO_CAPTURE=true on the Intent so
+     * KobitonCameraActivity skips the standard-camera Phase 1 and goes directly
+     * to the Kobiton capture path.  The JS layer shows a CameraView preview
+     * before calling this method; the activity silently captures the Kobiton-
+     * injected frame and returns RESULT_OK with the photo URI.
+     */
+    @ReactMethod
+    fun openCameraAutoCapture(promise: Promise) {
+        launchCamera(autoCapture = true, promise = promise)
+    }
+
+    private fun launchCamera(autoCapture: Boolean, promise: Promise) {
         try {
             val activity = reactApplicationContext.currentActivity ?: run {
-                Log.e(TAG, "KobitonCameraModule: openCamera — currentActivity is null")
+                Log.e(TAG, "KobitonCameraModule: launchCamera — currentActivity is null")
                 promise.reject("E_NO_ACTIVITY", "No current Activity — ensure the app is in the foreground")
                 return
             }
-            Log.d(TAG, "KobitonCameraModule: launching KobitonCameraActivity")
+            Log.d(TAG, "KobitonCameraModule: launching KobitonCameraActivity autoCapture=$autoCapture")
             pendingPromise = promise
             val intent = Intent(activity, KobitonCameraActivity::class.java)
+            intent.putExtra(KobitonCameraActivity.EXTRA_AUTO_CAPTURE, autoCapture)
             activity.startActivityForResult(intent, CAMERA_REQUEST_CODE)
         } catch (e: Exception) {
-            Log.e(TAG, "KobitonCameraModule: openCamera exception — ${e.javaClass.name}: ${e.message}", e)
+            Log.e(TAG, "KobitonCameraModule: launchCamera exception — ${e.javaClass.name}: ${e.message}", e)
             pendingPromise = null
             promise.reject("E_CAMERA_ERROR", e.message ?: "Unknown error launching camera")
         }

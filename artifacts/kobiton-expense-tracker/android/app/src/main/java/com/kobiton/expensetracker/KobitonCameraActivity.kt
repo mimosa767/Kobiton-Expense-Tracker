@@ -63,13 +63,21 @@ class KobitonCameraActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "[KobitonSDK]"
-        const val EXTRA_PHOTO_URI = "photoUri"
+        const val EXTRA_PHOTO_URI   = "photoUri"
+        /**
+         * When true the activity skips Phase 1 (standard-camera live preview)
+         * and goes directly to the Kobiton capture path.  The JS layer is
+         * responsible for showing a live CameraView preview before launching
+         * this activity; the activity then silently captures the Kobiton-
+         * injected frame and returns immediately.
+         *
+         * Set by KobitonCameraModule.openCameraAutoCapture().
+         */
+        const val EXTRA_AUTO_CAPTURE = "autoCapture"
         private const val CAPTURE_WIDTH  = 1280
         private const val CAPTURE_HEIGHT = 720
         private const val MAX_KOBITON_RETRIES = 3
         private const val RETRY_DELAY_MS      = 300L
-        // Time (ms) to wait for Kobiton injection to populate the TextureView
-        // after the Kobiton capture session is configured.
         private const val INJECTION_WAIT_MS   = 800L
     }
 
@@ -78,6 +86,13 @@ class KobitonCameraActivity : AppCompatActivity() {
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
     private var isCapturing = false
+
+    /**
+     * Auto-capture mode: skip Phase 1 (standard camera live preview).
+     * The JS CameraView showed the live camera; we only need to capture the
+     * Kobiton-injected frame via the Kobiton camera session.
+     */
+    private var autoCapture = false
 
     // Snapshot of the last live-camera frame taken immediately before the
     // standard camera session is closed in takePhoto().  Used as a fallback
@@ -97,8 +112,15 @@ class KobitonCameraActivity : AppCompatActivity() {
     // ── SurfaceTexture listener ───────────────────────────────────────────────
     private val surfaceTextureListener = object : TextureView.SurfaceTextureListener {
         override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-            Log.d(TAG, "KobitonCameraActivity: surface ready (${width}x${height})")
-            openPreviewCamera()
+            Log.d(TAG, "KobitonCameraActivity: surface ready (${width}x${height}) autoCapture=$autoCapture")
+            if (autoCapture) {
+                // Auto-capture: JS already showed the live preview via CameraView.
+                // Skip Phase 1 entirely and go straight to Kobiton injection capture.
+                isCapturing = true
+                openKobitonCamera()
+            } else {
+                openPreviewCamera()
+            }
         }
         override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
         override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
@@ -157,15 +179,29 @@ class KobitonCameraActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.d(TAG, "KobitonCameraActivity: onCreate")
+        autoCapture = intent.getBooleanExtra(EXTRA_AUTO_CAPTURE, false)
+        Log.d(TAG, "KobitonCameraActivity: onCreate autoCapture=$autoCapture")
         buildLayout()
     }
 
     override fun onResume() {
         super.onResume()
         startBackgroundThread()
-        if (textureView.isAvailable) openPreviewCamera()
-        else textureView.surfaceTextureListener = surfaceTextureListener
+        if (autoCapture) {
+            // Auto-capture mode: bypass Phase 1 standard-camera preview entirely.
+            // The JS CameraView has already shown the live camera to the user.
+            isCapturing = true
+            if (textureView.isAvailable) {
+                Log.d(TAG, "KobitonCameraActivity: auto-capture — surface ready, opening Kobiton camera")
+                openKobitonCamera()
+            } else {
+                Log.d(TAG, "KobitonCameraActivity: auto-capture — waiting for surface")
+                textureView.surfaceTextureListener = surfaceTextureListener
+            }
+        } else {
+            if (textureView.isAvailable) openPreviewCamera()
+            else textureView.surfaceTextureListener = surfaceTextureListener
+        }
     }
 
     override fun onPause() {
@@ -251,32 +287,58 @@ class KobitonCameraActivity : AppCompatActivity() {
         }
         root.addView(cancelBtn)
 
-        // Capture (⬤) — bottom center, above the navigation bar.
-        //
-        // WHY bottomMargin = navBarHeightPx() + 32 dp:
-        //   Static 100 px hid the button behind the ~126 px nav bar on Pixel 6.
-        //   We now query the actual nav bar height at runtime and add 32 dp of
-        //   breathing room so the button is always comfortably visible.
-        captureBtn = TextView(this).apply {
-            text = "⬤"
-            textSize = 52f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            isClickable = false
-            isFocusable = false
-            isEnabled = false
-            alpha = 0.35f
-            contentDescription = "Take photo"
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-            ).also {
-                it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                it.bottomMargin = navBarHeightPx() + dpToPx(32f)
+        if (autoCapture) {
+            // Auto-capture mode: no interactive shutter button.
+            // The JS CameraView already showed the live preview; this activity
+            // silently opens the Kobiton camera and captures the injected frame.
+            // Show a "Capturing…" label so the user sees progress.
+            val capturingLabel = TextView(this).apply {
+                text = "Capturing…"
+                textSize = 17f
+                setTextColor(Color.WHITE)
+                setBackgroundColor(0x99000000.toInt())
+                setPadding(dpToPx(24f), dpToPx(10f), dpToPx(24f), dpToPx(10f))
+                gravity = Gravity.CENTER
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                ).also {
+                    it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                    it.bottomMargin = navBarHeightPx() + dpToPx(48f)
+                }
             }
+            root.addView(capturingLabel)
+            // captureBtn is lateinit; create it but do NOT add to layout —
+            // takePhoto() never runs in auto-capture mode (isCapturing=true).
+            captureBtn = TextView(this)
+        } else {
+            // Normal mode: Capture (⬤) — bottom center, above the navigation bar.
+            //
+            // WHY bottomMargin = navBarHeightPx() + 32 dp:
+            //   Static 100 px hid the button behind the ~126 px nav bar on Pixel 6.
+            //   We now query the actual nav bar height at runtime and add 32 dp of
+            //   breathing room so the button is always comfortably visible.
+            captureBtn = TextView(this).apply {
+                text = "⬤"
+                textSize = 52f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                isClickable = false
+                isFocusable = false
+                isEnabled = false
+                alpha = 0.35f
+                contentDescription = "Take photo"
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                ).also {
+                    it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                    it.bottomMargin = navBarHeightPx() + dpToPx(32f)
+                }
+            }
+            captureBtn.setOnClickListener { takePhoto() }
+            root.addView(captureBtn)
         }
-        captureBtn.setOnClickListener { takePhoto() }
-        root.addView(captureBtn)
 
         setContentView(root)
     }

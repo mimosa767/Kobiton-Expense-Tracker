@@ -73,7 +73,23 @@ export default function LocationMockScreen() {
     Animated.timing(pulseAnim, { toValue: 1, duration: 200, useNativeDriver: nativeDriver }).start();
   }, [pulseAnim, nativeDriver]);
 
-  const readLocation = useCallback(async () => {
+  useEffect(() => {
+    // ── WHY watchPositionAsync instead of getCurrentPositionAsync ──────────────
+    //
+    // getCurrentPositionAsync may return a CACHED GPS fix from before the
+    // Kobiton location injection was active.  On both iOS and Android, the OS
+    // location subsystem caches the last known fix; if the cache is fresher
+    // than the requested accuracy window, it is returned immediately — even
+    // when Kobiton has already pushed different coordinates.
+    //
+    // watchPositionAsync subscribes to the OS location stream, so every time
+    // Kobiton injects a new coordinate pair the listener fires immediately and
+    // the UI updates in real time — without requiring the user to tap Refresh.
+    // The subscription is torn down on unmount or when refreshCount changes.
+
+    let subscription: Location.LocationSubscription | null = null;
+    let cancelled = false;
+
     setErrorMsg(null);
     startPulse();
 
@@ -84,63 +100,76 @@ export default function LocationMockScreen() {
       return;
     }
 
-    try {
-      setStatus('requesting');
+    (async () => {
+      try {
+        setStatus('requesting');
 
-      const current = await Location.getForegroundPermissionsAsync();
-      let granted = current.status === 'granted';
-
-      if (!granted) {
-        if (current.status === 'undetermined') {
-          const PERM_TIMEOUT = 15_000;
-          const result = await Promise.race([
-            Location.requestForegroundPermissionsAsync(),
-            new Promise<{ status: Location.PermissionStatus }>((resolve) =>
-              setTimeout(() => resolve({ status: 'denied' as Location.PermissionStatus }), PERM_TIMEOUT)
-            ),
-          ]);
-          granted = result.status === 'granted';
-        }
+        const current = await Location.getForegroundPermissionsAsync();
+        let granted = current.status === 'granted';
 
         if (!granted) {
-          setStatus('denied');
-          stopPulse();
-          setErrorMsg(
-            current.status === 'denied'
-              ? 'Location permission was previously denied. Open Settings to enable it.'
-              : 'Location permission was not granted. Enable it in Settings and tap Refresh.'
-          );
-          return;
+          if (current.status === 'undetermined') {
+            const PERM_TIMEOUT = 15_000;
+            const result = await Promise.race([
+              Location.requestForegroundPermissionsAsync(),
+              new Promise<{ status: Location.PermissionStatus }>((resolve) =>
+                setTimeout(() => resolve({ status: 'denied' as Location.PermissionStatus }), PERM_TIMEOUT)
+              ),
+            ]);
+            granted = result.status === 'granted';
+          }
+
+          if (!granted) {
+            if (cancelled) return;
+            setStatus('denied');
+            stopPulse();
+            setErrorMsg(
+              current.status === 'denied'
+                ? 'Location permission was previously denied. Open Settings to enable it.'
+                : 'Location permission was not granted. Enable it in Settings and tap Refresh.'
+            );
+            return;
+          }
         }
+
+        if (cancelled) return;
+        setStatus('acquiring');
+
+        // Watch for real-time location updates.  timeInterval/distanceInterval=0
+        // means "as fast as the OS reports" — catches Kobiton injection immediately.
+        subscription = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.High, timeInterval: 0, distanceInterval: 0 },
+          async (pos) => {
+            if (cancelled) return;
+            const { city, country } = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+            if (cancelled) return;
+            setLocation({
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+              accuracy: pos.coords.accuracy ?? null,
+              altitude: pos.coords.altitude ?? null,
+              city,
+              country,
+              receivedAt: new Date().toISOString(),
+            });
+            setStatus('received');
+            stopPulse();
+          }
+        );
+      } catch (e) {
+        if (cancelled) return;
+        setStatus('error');
+        setErrorMsg(String(e));
+        stopPulse();
       }
+    })();
 
-      setStatus('acquiring');
-      const pos = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
-
-      const { city, country } = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-
-      setLocation({
-        latitude: pos.coords.latitude,
-        longitude: pos.coords.longitude,
-        accuracy: pos.coords.accuracy ?? null,
-        altitude: pos.coords.altitude ?? null,
-        city,
-        country,
-        receivedAt: new Date().toISOString(),
-      });
-      setStatus('received');
-    } catch (e) {
-      setStatus('error');
-      setErrorMsg(String(e));
-    } finally {
+    return () => {
+      cancelled = true;
+      subscription?.remove();
       stopPulse();
-    }
-  }, [startPulse, stopPulse]);
-
-  useEffect(() => {
-    readLocation();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshCount]);
 
   const isLoading = status === 'requesting' || status === 'acquiring';
