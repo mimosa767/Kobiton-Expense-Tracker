@@ -32,12 +32,18 @@ const LOAD_CONFIG: Record<LoadLevel, {
 
 // ─── Android native stress module ─────────────────────────────────────────────
 // On Android, CPU and memory stress run on native JVM threads via
-// KobitonCameraModule.  Each CPU thread occupies one physical core
-// (independent of the JS/Hermes thread), so 6 threads produce ~75% total
-// CPU on a Pixel 6 (8-core).  Memory is allocated as JVM ByteArrays with
-// a non-uniform XOR pattern that defeats zRAM compression.
+// KobitonCameraModule (NOT the JS/Hermes thread), so the Stop button is
+// always responsive.
 //
-// Because work runs off the JS thread, the Stop button responds instantly.
+// CPU: N daemon threads each running a floating-point math loop.  6 threads
+//      on a Pixel 6 (8-core) produces ~70% total CPU — confirmed in Kobiton.
+//
+// Memory: ByteBuffer.allocateDirect() — native malloc(), not JVM heap — so
+//      there is no per-app heap cap.  A background thrash thread touches one
+//      byte per 4 KB page across every buffer every 100 ms, which is shorter
+//      than Android's zRAM compression window (~1–2 s under high pressure),
+//      keeping all allocated pages physically resident in RSS.
+
 interface NativeStressModule {
   startCpuStress(threadCount: number): Promise<number>;
   stopCpuStress(): Promise<void>;

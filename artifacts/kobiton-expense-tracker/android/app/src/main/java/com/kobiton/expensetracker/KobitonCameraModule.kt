@@ -262,12 +262,24 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
 
     // ─── Memory thrash loop ───────────────────────────────────────────────────
     //
-    // Runs on a dedicated daemon thread.  Every 20 ms it writes one XOR byte
-    // into a pseudo-random position in each allocated buffer.  This:
-    //   • Keeps pages in the CPU's L2/L3 cache and the OS working set.
-    //   • Prevents zRAM from compressing pages that haven't been touched.
-    //   • Ensures the RSS metric Kobiton records stays elevated for the full
-    //     duration of the stress test.
+    // WHY a page-level sweep instead of one random byte per buffer:
+    //
+    //   A 1 MB DirectByteBuffer spans 256 virtual memory pages (4 KB each).
+    //   Android's zRAM subsystem compresses pages that haven't been accessed
+    //   recently — under high memory pressure this can happen within 1–2 s.
+    //
+    //   The old approach wrote one byte per BUFFER every 20 ms.  For a 1 MB
+    //   buffer that means each page was touched only once every:
+    //       256 pages × 20 ms = 5.12 seconds
+    //   — far longer than zRAM's compression window.  So 75 %+ of the
+    //   allocated pages were silently compressed back, making them invisible
+    //   to Kobiton's RSS metric even though the allocation "succeeded".
+    //
+    //   The fix: write one byte per 4 KB PAGE per buffer per sweep, at a
+    //   100 ms interval.  For 300 MB = 300 × 1 MB buffers:
+    //       76 800 pages × ~50 ns/put = ~3.8 ms per sweep   (3.8 % of one core)
+    //   Every page is touched within the 100 ms window — shorter than zRAM's
+    //   compression threshold even under severe memory pressure.
 
     private fun startMemoryThrash() {
         thrashThread?.interrupt()
@@ -275,17 +287,20 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
             var cycle = 0
             while (memRunning && !Thread.currentThread().isInterrupted) {
                 try {
+                    val writeByte = (cycle and 0xFF).toByte()
                     for (buf in memoryBuffers) {
                         if (!memRunning || Thread.currentThread().isInterrupted) break
                         val cap = buf.capacity()
-                        if (cap < 2) continue
-                        // Touch a position that shifts every cycle so different
-                        // pages are accessed across iterations.
-                        val pos = (cycle * 4096 + 512) % (cap - 1)
-                        buf.put(pos, (buf.get(pos).toInt() xor 0xA5).toByte())
+                        // Touch one byte per 4 KB page — keeps EVERY page in the
+                        // OS working set and prevents zRAM from compressing them.
+                        var page = 0
+                        while (page < cap) {
+                            buf.put(page, writeByte)
+                            page += 4096
+                        }
                     }
-                    cycle++
-                    Thread.sleep(20)
+                    cycle = (cycle + 1) and 0xFF   // 0..255, no division needed
+                    Thread.sleep(100)              // full sweep every 100 ms
                 } catch (e: InterruptedException) {
                     break
                 } catch (e: Exception) {
