@@ -82,19 +82,54 @@ function stopCPULoad() {
 }
 
 // ─── iOS JS fallback — memory pressure ────────────────────────────────────────
+//
+// WHY crypto.getRandomValues() instead of a byte-by-byte XOR loop:
+//   iOS uses lossless memory compression (similar to zRAM on Android).
+//   A uniform fill like 0xA5…0xA5 compresses to near-zero bytes, so the
+//   allocation appears to vanish from the OS RSS that Kobiton measures.
+//
+//   crypto.getRandomValues() fills a TypedArray with cryptographically random
+//   bytes via a native C call — the same speed as memset but with
+//   cryptographic-quality entropy that NO compression algorithm can reduce.
+//   Pages filled this way stay fully resident in RSS for the life of the block.
+//
+//   crypto is available in React Native (Hermes) since RN 0.71; Expo SDK 54
+//   uses RN 0.76, so it is guaranteed to be present.
+//
+// WHY larger chunks (10 MB) and less frequent yields (every 5 chunks):
+//   Yielding more often lets the JS GC reclaim earlier blocks before later
+//   blocks are allocated, understating the total held memory.  Fewer yields
+//   keeps all blocks live simultaneously, producing the full RSS spike in
+//   Kobiton's metrics.
+//
+// WHY aggressive thrash (every 20 ms, 25% of each block):
+//   iOS reclaims pages that haven't been accessed recently.  Dirtying 25%
+//   of every block every 20 ms keeps pages in the working set for the
+//   entire duration of the stress test.
+
 const BYTES_PER_MB = 1024 * 1024;
-const THRASH_INTERVAL_MS = 20;
-const THRASH_DIRTY_RATIO = 0.05;
+// crypto.getRandomValues() is capped at 65536 bytes per call.
+const CRYPTO_CHUNK = 65536;
+const THRASH_INTERVAL_MS  = 20;
+const THRASH_DIRTY_RATIO  = 0.25;   // 25% of each block per interval
 
 let _memBlocks: Uint8Array[] = [];
 let _thrashTimer: ReturnType<typeof setInterval> | null = null;
 let _memRunning = false;
 
+/** Fill a Uint8Array with random bytes using crypto.getRandomValues(). */
+function fillRandom(block: Uint8Array): void {
+  for (let off = 0; off < block.length; off += CRYPTO_CHUNK) {
+    const slice = block.subarray(off, off + Math.min(CRYPTO_CHUNK, block.length - off));
+    crypto.getRandomValues(slice);
+  }
+}
+
 async function allocateMemory(mb: number): Promise<void> {
   releaseMemory();
   _memRunning = true;
-  const CHUNK_MB    = 5;
-  const YIELD_EVERY = 2;
+  const CHUNK_MB    = 10;   // 10 MB per block — fewer, larger allocations
+  const YIELD_EVERY = 5;    // yield every 50 MB so GC can't reclaim early blocks
   const chunks      = Math.ceil(mb / CHUNK_MB);
   for (let i = 0; i < chunks; i++) {
     if (!_memRunning) return;
@@ -102,9 +137,8 @@ async function allocateMemory(mb: number): Promise<void> {
     const byteSize = chunkMB * BYTES_PER_MB;
     try {
       const block = new Uint8Array(byteSize);
-      for (let p = 0; p < byteSize; p++) {
-        block[p] = (p ^ 0xA5) & 0xFF;
-      }
+      // Fill with cryptographically random bytes — defeats iOS memory compression.
+      fillRandom(block);
       _memBlocks.push(block);
     } catch (_) {
       break;
@@ -119,6 +153,7 @@ async function allocateMemory(mb: number): Promise<void> {
     if (!_memRunning || _memBlocks.length === 0) return;
     for (let b = 0; b < _memBlocks.length; b++) {
       const block = _memBlocks[b];
+      // Touch 25% of each block — keeps pages hot in the iOS working set.
       const dirtyCount = Math.max(1, (block.length * THRASH_DIRTY_RATIO) | 0);
       for (let d = 0; d < dirtyCount; d++) {
         const pos  = (block.length * Math.random()) | 0;

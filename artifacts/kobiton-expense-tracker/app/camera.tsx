@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   NativeModules,
+  PermissionsAndroid,
   Platform,
   StyleSheet,
   Text,
@@ -40,84 +41,97 @@ function WebFallback() {
   );
 }
 
-// ─── Android: show CameraView preview, then delegate capture to KobitonCameraActivity ─
+// ─── Android: delegate to KobitonCameraActivity via KobitonCameraModule ────────
 //
-// WHY show CameraView first (mirrors QR scanner pattern):
-//   The QR scanner in media-gallery.tsx works reliably because it mounts a
-//   CameraView preview first, then unmounts it (releasing camera hardware)
-//   before launching KobitonCameraActivity.  The old approach — immediately
-//   firing openCamera() with no preview — caused KobitonCameraActivity to
-//   crash on the second launch: the camera2 session from the first run had
-//   not fully released yet when the second openCamera() arrived.
+// WHY we do NOT show a CameraView preview first (Android only):
+//   Kobiton's image injection ("Please ensure your application integrates
+//   Kobiton SDK before using image injection") only works when the ACTIVE
+//   camera session is opened through kobiton.hardware.camera2.CameraManager
+//   (i.e. KobitonCameraActivity is in the foreground).  expo-camera's
+//   CameraView uses the standard android.hardware.camera2.CameraManager,
+//   which Kobiton does NOT intercept for injection purposes — showing it
+//   first would block injection for the entire camera flow.
 //
-//   By mounting CameraView first we:
-//     1. Show the Kobiton-injected image in the live preview.
-//     2. Unmount CameraView (release hardware) before launching the native activity.
-//     3. KobitonCameraActivity then has exclusive, clean access to the camera.
+//   The QR scanner avoids this because the user taps "Scan" BEFORE injecting,
+//   which unmounts CameraView and opens KobitonCameraActivity; injection then
+//   succeeds because the Kobiton SDK camera is active.
 //
-// WHY still use KobitonCameraActivity for capture (not takePictureAsync):
-//   expo-camera's takePictureAsync goes through Android's standard ImageReader
-//   pipeline, which Kobiton does NOT intercept.  Only kobiton.hardware.camera2
-//   (used inside KobitonCameraActivity) injects the synthetic frame into the
-//   TextureView bitmap, so we must call openCamera() for the actual capture.
+//   For receipt capture the injection must happen INSIDE KobitonCameraActivity,
+//   so we skip the CameraView preview altogether and open the activity directly.
+//
+// WHY there was a second-open crash (now fixed in KobitonCameraActivity):
+//   The Kobiton SDK's camera manager retains internal state for ~200–300 ms
+//   after the first activity closes.  A second openCamera() call within that
+//   window triggers onError (ERROR_CAMERA_IN_USE or ERROR_CAMERA_DEVICE).
+//   KobitonCameraActivity now retries up to 3 times with a 300 ms back-off
+//   before giving up, which covers the typical cleanup window.
 
 function AndroidKobitonCamera() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
-  const [cameraVisible, setCameraVisible] = useState(true);
-  const [capturing, setCapturing] = useState(false);
-  const [permission, requestPermission] = useCameraPermissions();
-  const mod = NativeModules.KobitonCameraModule;
+  const [error, setError] = useState<string | null>(null);
+  const launched = useRef(false);
 
-  // Request permission immediately on mount — same rationale as IosCameraScreen:
-  // useCameraPermissions returns null while the OS resolves the permission
-  // asynchronously; requesting here ensures the dialog fires before CameraView
-  // mounts, preventing a permission-race crash on first open.
   useEffect(() => {
-    requestPermission();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (launched.current) return;
+    launched.current = true;
 
-  const handleCapture = useCallback(async () => {
-    if (capturing || !mod) return;
-    try {
-      setCapturing(true);
-      // Unmount CameraView BEFORE launching KobitonCameraActivity so that
-      // expo-camera releases the camera2 hardware lock first.  If both hold
-      // the camera simultaneously the native activity crashes.  This is the
-      // same unmount-then-capture pattern used by the QR scanner.
-      setCameraVisible(false);
-      const uri: string = await mod.openCamera();
-      console.log('[CameraScreen] KobitonCameraModule.openCamera resolved →', uri);
-      const fileName = `receipt_${Date.now()}.jpg`;
-      callCameraCallback(uri, fileName);
-      router.back();
-    } catch (err: any) {
-      setCapturing(false);
-      setCameraVisible(true);   // restore preview so user can retry
-      const code: string = err?.code ?? '';
-      if (code === 'E_CANCELLED') {
-        console.log('[CameraScreen] KobitonCameraModule: user cancelled');
-      } else {
-        console.error('[CameraScreen] KobitonCameraModule.openCamera rejected:', err);
+    (async () => {
+      const mod = NativeModules.KobitonCameraModule;
+      if (!mod) {
+        console.error('[CameraScreen] KobitonCameraModule not available — NativeModules:', Object.keys(NativeModules));
+        setError('KobitonCameraModule is not registered.\nRun expo prebuild and rebuild the app.');
+        return;
       }
-      clearCameraCallback();
-      router.back();
-    }
-  }, [capturing, mod, router]);
 
-  const handleCancel = useCallback(() => {
-    clearCameraCallback();
-    router.back();
+      // Android requires explicit runtime permission before any Activity can
+      // open the camera hardware.  KobitonCameraActivity doesn't request it
+      // internally — if permission hasn't been granted the activity opens and
+      // immediately returns cancelled, making the button appear broken on the
+      // first tap (subsequent taps work because the permission is now cached).
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+          {
+            title: 'Camera Permission',
+            message: 'This app needs access to your camera to capture receipt photos.',
+            buttonPositive: 'Allow',
+            buttonNegative: 'Cancel',
+          }
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          console.log('[CameraScreen] Camera permission denied');
+          clearCameraCallback();
+          router.back();
+          return;
+        }
+      } catch (permErr) {
+        console.warn('[CameraScreen] Permission request error:', permErr);
+      }
+
+      try {
+        const uri: string = await mod.openCamera();
+        console.log('[CameraScreen] KobitonCameraModule.openCamera resolved →', uri);
+        const fileName = `receipt_${Date.now()}.jpg`;
+        callCameraCallback(uri, fileName);
+        router.back();
+      } catch (err: any) {
+        const code: string = err?.code ?? '';
+        if (code === 'E_CANCELLED') {
+          console.log('[CameraScreen] KobitonCameraModule: user cancelled');
+        } else {
+          console.error('[CameraScreen] KobitonCameraModule.openCamera rejected:', err);
+        }
+        clearCameraCallback();
+        router.back();
+      }
+    })();
   }, [router]);
 
-  // ── Module check ─────────────────────────────────────────────────────────────
-  if (!mod) {
+  if (error) {
     return (
       <View style={styles.permissionContainer}>
         <Feather name="alert-triangle" size={40} color={Colors.error} />
-        <Text style={[styles.permissionText, { color: Colors.error }]}>
-          KobitonCameraModule is not registered.{'\n'}Run expo prebuild and rebuild the app.
-        </Text>
+        <Text style={[styles.permissionText, { color: Colors.error }]}>{error}</Text>
         <TouchableOpacity
           style={[styles.permissionBtn, styles.cancelBtn]}
           onPress={() => { clearCameraCallback(); router.back(); }}
@@ -128,77 +142,10 @@ function AndroidKobitonCamera() {
     );
   }
 
-  // ── Permission gate ───────────────────────────────────────────────────────────
-  // Do NOT render CameraView (and therefore do not start camera2) until we have
-  // confirmed camera authorization — same guard used by IosCameraScreen.
-  if (!permission) {
-    return (
-      <View style={styles.permissionContainer}>
-        <ActivityIndicator color={Colors.white} size="large" />
-        <Text style={styles.permissionText}>Checking camera access…</Text>
-      </View>
-    );
-  }
-
-  if (!permission.granted) {
-    return (
-      <View style={styles.permissionContainer}>
-        <Feather name="camera-off" size={44} color={Colors.white} />
-        <Text style={styles.permissionText}>
-          Camera access is required to capture receipt photos.
-        </Text>
-        {permission.canAskAgain ? (
-          <TouchableOpacity style={styles.permissionBtn} onPress={requestPermission}>
-            <Text style={styles.permissionBtnText}>Allow Camera Access</Text>
-          </TouchableOpacity>
-        ) : (
-          <Text style={[styles.permissionText, { fontSize: 13, opacity: 0.7 }]}>
-            Open Settings → Privacy → Camera → enable for this app.
-          </Text>
-        )}
-        <TouchableOpacity
-          style={[styles.permissionBtn, styles.cancelBtn]}
-          onPress={handleCancel}
-        >
-          <Text style={styles.permissionBtnText}>Cancel</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  // ── Camera is authorized — render preview + capture button ───────────────────
   return (
-    <View style={styles.container}>
-      {cameraVisible && (
-        <CameraView
-          style={StyleSheet.absoluteFill}
-          facing="back"
-        />
-      )}
-
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity onPress={handleCancel} style={styles.iconBtn} accessibilityLabel="Cancel">
-          <Feather name="x" size={26} color={Colors.white} />
-        </TouchableOpacity>
-        <Text style={styles.topBarTitle}>Take Receipt Photo</Text>
-        <View style={styles.iconBtn} />
-      </View>
-
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 24 }]}>
-        <TouchableOpacity
-          onPress={handleCapture}
-          style={[styles.captureBtn, capturing && styles.captureBtnDisabled]}
-          disabled={capturing}
-          accessibilityLabel="Capture photo"
-          accessibilityRole="button"
-          testID="capture-button"
-        >
-          {capturing
-            ? <ActivityIndicator color={Colors.primary} size="small" />
-            : <View style={styles.captureInner} />
-          }
-        </TouchableOpacity>
-      </View>
+    <View style={styles.permissionContainer}>
+      <ActivityIndicator color={Colors.white} size="large" />
+      <Text style={styles.permissionText}>Opening camera…</Text>
     </View>
   );
 }
@@ -208,15 +155,26 @@ function AndroidKobitonCamera() {
 // Uses expo-camera on iOS. Kobiton's KobitonSdk.framework swizzles
 // AVCaptureSession at the OS level, so it intercepts camera frames from
 // any camera library — expo-camera, vision-camera, or AVFoundation directly.
+// CameraView works natively for injection on iOS; no native activity needed.
 
 function IosCameraScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const cameraRef = React.useRef<CameraView>(null);
+  const cameraRef = useRef<CameraView>(null);
   const [capturing, setCapturing] = useState(false);
   const [facing, setFacing] = useState<'back' | 'front'>('back');
   const [permission, requestPermission] = useCameraPermissions();
 
+  // Request permission immediately on mount regardless of current status.
+  //
+  // WHY: useCameraPermissions() returns null on the very first render while
+  // iOS checks the TCC database asynchronously. The previous guard
+  // `if (permission && !permission.granted)` evaluated to false when
+  // permission was null, so requestPermission() was never called — leaving
+  // AVCaptureSession starting without authorization. KobitonSdk.framework
+  // swizzles AVCaptureSession at the OS level; when the session starts before
+  // the user has granted access the SDK crashes on first attempt (works on
+  // retry because permission is already stored by then).
   useEffect(() => {
     requestPermission();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
