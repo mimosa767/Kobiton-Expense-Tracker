@@ -56,6 +56,7 @@ class KobitonCameraActivity : AppCompatActivity() {
     }
 
     private lateinit var textureView: TextureView
+    private lateinit var captureBtn: TextView
     private var kobitonCameraDevice: CameraDevice? = null
     private var kobitonCaptureSession: CameraCaptureSession? = null
     private var backgroundThread: HandlerThread? = null
@@ -126,9 +127,10 @@ class KobitonCameraActivity : AppCompatActivity() {
         }
         cancelBtn.setOnClickListener { Log.d(TAG, "KobitonCameraActivity: cancel pressed"); finishCancelled("User cancelled") }
         root.addView(cancelBtn)
-        val captureBtn = TextView(this).apply {
+        captureBtn = TextView(this).apply {
             text = "⬤"; textSize = 52f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
-            isClickable = true; isFocusable = true; contentDescription = "Take photo"
+            isClickable = false; isFocusable = false; isEnabled = false; alpha = 0.35f
+            contentDescription = "Take photo"
             layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).also {
                 it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; it.bottomMargin = 100
             }
@@ -192,6 +194,18 @@ class KobitonCameraActivity : AppCompatActivity() {
                     kobitonCaptureSession = session
                     try { session.setRepeatingRequest(previewRequest.build(), null, backgroundHandler) }
                     catch (e: Exception) { Log.e(TAG, "setRepeatingRequest failed: ${e.message}", e) }
+                    // Wait 800 ms for the TextureView GL texture to receive its first
+                    // frame from the camera (or from Kobiton's injection pipeline).
+                    // getBitmap() called before this window returns a solid-black bitmap.
+                    runOnUiThread {
+                        captureBtn.postDelayed({
+                            captureBtn.isEnabled   = true
+                            captureBtn.isClickable = true
+                            captureBtn.isFocusable = true
+                            captureBtn.alpha       = 1.0f
+                            Log.d(TAG, "KobitonCameraActivity: capture button enabled")
+                        }, 800)
+                    }
                 }
                 override fun onConfigureFailed(session: CameraCaptureSession) {
                     Log.e(TAG, "KobitonCameraActivity: CaptureSession.onConfigureFailed")
