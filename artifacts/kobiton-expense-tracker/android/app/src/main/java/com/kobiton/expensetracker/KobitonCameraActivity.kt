@@ -78,6 +78,10 @@ class KobitonCameraActivity : AppCompatActivity() {
         private const val CAPTURE_HEIGHT = 720
         private const val MAX_KOBITON_RETRIES = 3
         private const val RETRY_DELAY_MS      = 300L
+        // Retry budget for empty getCameraIdList() in auto-capture mode.
+        // 6 × 500ms = 3s, matching the 3s poll budget in the JS QR scanner path.
+        private const val MAX_CAMERA_LIST_RETRIES  = 6
+        private const val CAMERA_LIST_RETRY_DELAY_MS = 500L
         //
         // WHY 2 000 ms:
         //   After kobiton.hardware.camera2 opens its session and setRepeatingRequest()
@@ -86,11 +90,14 @@ class KobitonCameraActivity : AppCompatActivity() {
         //     2. Pipeline the injected frame into the SurfaceTexture
         //     3. SurfaceTexture.updateTexImage() renders it so getBitmap() sees it
         //   This typically takes 500–1 500 ms on a Pixel 6.  iOS uses 1 500 ms for
-        //   the equivalent KobitonCaptureModule.captureFrame() call; we use 2 000 ms
-        //   for additional safety (Android's camera2 session startup is slightly slower).
-        //   If the wait is too short, getBitmap() returns the last LIVE frame (or null
-        //   in auto-capture mode where there is no live-camera baseline).
-        private const val INJECTION_WAIT_MS   = 2_000L
+        //   the equivalent KobitonCaptureModule.captureFrame() call; we use 3 000 ms
+        //   to match the 3-second poll budget used in the QR scanner path and to give
+        //   ImageInjectionClient enough time even on slow WebSocket reconnects.
+        //   Increased from 2 000 ms: log (session 8548140) shows StreamStateObserver
+        //   reached STREAMING at 09:01:22.960 — 274ms after openCaptureSession.  The
+        //   full injection pipeline (WebSocket → frame delivery → SurfaceTexture) can
+        //   take up to 2.5 s, leaving only 500 ms of margin at 2 000 ms.
+        private const val INJECTION_WAIT_MS   = 3_000L
     }
 
     private lateinit var textureView: TextureView
@@ -120,6 +127,21 @@ class KobitonCameraActivity : AppCompatActivity() {
     private var kobitonCameraDevice: KobitonCameraDevice? = null
     private var kobitonCaptureSession: KobitonCameraCaptureSession? = null
     private var kobitonOpenRetries = 0
+
+    // ── Retry counter for empty getCameraIdList() in auto-capture mode ────────
+    // In auto-capture mode there is no Phase 1 live-camera baseline, so
+    // captureFromTextureView() returns getBitmap() = null → finishCancelled().
+    // getCameraIdList() is empty when Kobiton's ImageInjectionClient has not
+    // yet connected to the platform WebSocket.  Log evidence (session 8548140):
+    //   Camera0 opened    09:01:22.686
+    //   Session STREAMING 09:01:22.960  (+274ms)
+    //   Camera0 closed    09:01:31.559  (8.9s of session with no RESULT_OK)
+    // KobitonCameraActivity was launched at 09:01:22 in autoCapture=true mode.
+    // getCameraIdList() was empty on the first call → captureFromTextureView()
+    // → getBitmap() = null (no Phase 1 frame) → finishCancelled() → E_CANCELLED.
+    // Fix: retry getCameraIdList() up to MAX_CAMERA_LIST_RETRIES × 500ms before
+    // giving up, giving the ImageInjectionClient time to connect.
+    private var kobitonCameraListRetries = 0
 
     // ── SurfaceTexture listener ───────────────────────────────────────────────
     private val surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -431,6 +453,7 @@ class KobitonCameraActivity : AppCompatActivity() {
     private fun takePhoto() {
         if (isCapturing) return
         isCapturing = true
+        kobitonCameraListRetries = 0  // reset — normal mode always has a live frame fallback
         Log.d(TAG, "KobitonCameraActivity: capture tapped — snapshotting live frame before session switch")
 
         // Snapshot the live camera frame NOW, while the standard camera session
@@ -467,10 +490,26 @@ class KobitonCameraActivity : AppCompatActivity() {
             val manager = KobitonCameraManager.getInstance(this)
             val cameraIds = manager.getCameraIdList()
             if (cameraIds.isEmpty()) {
-                Log.w(TAG, "KobitonCameraActivity: no Kobiton cameras — falling back to live frame")
-                captureFromTextureView()
+                // In auto-capture mode there is no Phase 1 live frame in the
+                // TextureView, so the immediate fallback path (captureFromTextureView
+                // → getBitmap() = null → finishCancelled) discards the receipt.
+                // Retry up to MAX_CAMERA_LIST_RETRIES × CAMERA_LIST_RETRY_DELAY_MS
+                // to give Kobiton's ImageInjectionClient time to connect before giving up.
+                if (autoCapture && kobitonCameraListRetries < MAX_CAMERA_LIST_RETRIES) {
+                    kobitonCameraListRetries++
+                    Log.d(TAG, "KobitonCameraActivity: getCameraIdList empty in auto-capture mode, " +
+                        "retry $kobitonCameraListRetries/$MAX_CAMERA_LIST_RETRIES " +
+                        "in ${CAMERA_LIST_RETRY_DELAY_MS}ms")
+                    backgroundHandler?.postDelayed({ openKobitonCamera() }, CAMERA_LIST_RETRY_DELAY_MS)
+                } else {
+                    Log.w(TAG, "KobitonCameraActivity: no Kobiton cameras after " +
+                        "$kobitonCameraListRetries retries — falling back to live frame")
+                    kobitonCameraListRetries = 0
+                    captureFromTextureView()
+                }
                 return
             }
+            kobitonCameraListRetries = 0
             Log.d(TAG, "KobitonCameraActivity: opening Kobiton camera id=${cameraIds[0]}")
             manager.openCamera(cameraIds[0], kobitonCameraCallback, backgroundHandler)
         } catch (e: Exception) {
