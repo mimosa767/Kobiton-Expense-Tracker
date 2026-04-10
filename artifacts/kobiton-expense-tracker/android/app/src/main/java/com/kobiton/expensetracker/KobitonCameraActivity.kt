@@ -600,6 +600,22 @@ class KobitonCameraActivity : AppCompatActivity() {
                         java.io.FileOutputStream(photoFile).use { it.write(bytes) }
                         val uri = "file://${photoFile.absolutePath}"
                         Log.d(TAG, "KobitonCameraActivity: photo saved → $uri (${bytes.size} bytes)")
+
+                        // ── Close Kobiton session BEFORE finishing the activity ──────────────
+                        // Log evidence (Apr 10 09:21–09:24): ImageInjectionClient crashed after
+                        // the first injection and all subsequent attempts failed for the rest of
+                        // the Kobiton session.  Root cause: kobitonCaptureSession still had an
+                        // active setRepeatingRequest when setResult+finish() tore down the
+                        // activity mid-frame, crashing the ImageInjectionClient service.
+                        // Explicitly stop + close the Kobiton session and device before calling
+                        // finish() so the ImageInjectionClient can drain its frame queue cleanly.
+                        try { kobitonCaptureSession?.stopRepeating() } catch (_: Exception) {}
+                        try { kobitonCaptureSession?.close()         } catch (_: Exception) {}
+                        try { kobitonCameraDevice?.close()           } catch (_: Exception) {}
+                        kobitonCaptureSession = null
+                        kobitonCameraDevice   = null
+                        Thread.sleep(150) // give ImageInjectionClient time to drain its queue
+
                         runOnUiThread {
                             setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_PHOTO_URI, uri))
                             finish()
@@ -623,10 +639,13 @@ class KobitonCameraActivity : AppCompatActivity() {
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun closeAllCameras() {
-        try { stdCaptureSession?.close()     } catch (e: Exception) { Log.e(TAG, "close stdCaptureSession: ${e.message}") }
-        try { stdCameraDevice?.close()       } catch (e: Exception) { Log.e(TAG, "close stdCameraDevice: ${e.message}") }
-        try { kobitonCaptureSession?.close() } catch (e: Exception) { Log.e(TAG, "close kobitonCaptureSession: ${e.message}") }
-        try { kobitonCameraDevice?.close()   } catch (e: Exception) { Log.e(TAG, "close kobitonCameraDevice: ${e.message}") }
+        try { stdCaptureSession?.stopRepeating()     } catch (e: Exception) { Log.e(TAG, "stopRepeating stdCaptureSession: ${e.message}") }
+        try { stdCaptureSession?.close()             } catch (e: Exception) { Log.e(TAG, "close stdCaptureSession: ${e.message}") }
+        try { stdCameraDevice?.close()               } catch (e: Exception) { Log.e(TAG, "close stdCameraDevice: ${e.message}") }
+        // stopRepeating before close so ImageInjectionClient can drain cleanly
+        try { kobitonCaptureSession?.stopRepeating() } catch (e: Exception) { Log.e(TAG, "stopRepeating kobitonCaptureSession: ${e.message}") }
+        try { kobitonCaptureSession?.close()         } catch (e: Exception) { Log.e(TAG, "close kobitonCaptureSession: ${e.message}") }
+        try { kobitonCameraDevice?.close()           } catch (e: Exception) { Log.e(TAG, "close kobitonCameraDevice: ${e.message}") }
         stdCaptureSession = null;     stdCameraDevice     = null
         kobitonCaptureSession = null; kobitonCameraDevice = null
         fallbackBitmap?.recycle(); fallbackBitmap = null

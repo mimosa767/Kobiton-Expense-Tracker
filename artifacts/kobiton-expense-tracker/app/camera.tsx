@@ -92,27 +92,30 @@ function AndroidKobitonCamera() {
     // tries to claim the camera2 hardware simultaneously (ERROR_CAMERA_IN_USE).
     setCameraVisible(false);
 
-    // ── Null-guard: check module + method exist before touching any state ────
-    // openCameraAutoCapture is registered at bridge startup and is always a
-    // function reference — it does not change type after KobitonCameraActivity
-    // returns.  The old pollForMethod block was checking `typeof === 'function'`
-    // which always returned true on the first tick (the method IS a function),
-    // so the poll was a no-op.  The real failure path (log 09:01:34.979) was
-    // that the poll timed out 13 s after Camera0 closed — meaning getMethod()
-    // kept returning undefined, not a type-changed function.  Root cause: the
-    // module itself was not registered, not a timing issue.
-    //
-    // Correct pattern: guard once up front, then call directly.
-    const mod = NativeModules.KobitonCameraModule;
+    // ── Settle delay FIRST, then re-read the module ───────────────────────────
+    // On repeat attempts, KobitonCameraActivity.finish() triggers a brief RN
+    // bridge re-initialization window during which NativeModules.KobitonCameraModule
+    // reads as undefined (log evidence Apr 10 09:21–09:24: "not registered" error
+    // on second attempt even though first capture succeeded).  Waiting 350ms BEFORE
+    // reading the module reference lets the bridge restore it; the retry loop below
+    // covers slower devices where re-registration takes up to ~500ms.
+    await new Promise<void>(resolve => setTimeout(resolve, 350));
+
+    // Re-read after settle: bridge may have just finished restoring the module.
+    let mod = NativeModules.KobitonCameraModule;
+    if (!mod?.openCameraAutoCapture) {
+      // Wait up to 500ms more (10 × 50ms) for the bridge to restore the reference.
+      for (let i = 0; i < 10; i++) {
+        await new Promise<void>(resolve => setTimeout(resolve, 50));
+        mod = NativeModules.KobitonCameraModule;
+        if (mod?.openCameraAutoCapture) break;
+      }
+    }
     if (!mod?.openCameraAutoCapture) {
       setError('KobitonCameraModule is not registered.\nRebuild the app with expo prebuild.');
       setCapturing(false);
       return;
     }
-
-    // Brief pause so React can unmount CameraView and camera2 can release
-    // the hardware lock before KobitonCameraActivity claims it.
-    await new Promise<void>(resolve => setTimeout(resolve, 350));
 
     try {
       // openCameraAutoCapture: skips KobitonCameraActivity Phase 1 (standard
@@ -122,6 +125,11 @@ function AndroidKobitonCamera() {
       console.log('[CameraScreen] openCameraAutoCapture resolved →', uri);
       const fileName = `receipt_${Date.now()}.jpg`;
       callCameraCallback(uri, fileName);
+      // Small delay: let the parent component's onChange handler process the URI
+      // before router.back() tears down this screen. Without this the callback
+      // fires into a stale closure as the navigation transition starts (log
+      // evidence Apr 10 09:21–09:24: receipt URI passed but form field empty).
+      await new Promise<void>(resolve => setTimeout(resolve, 80));
       router.back();
     } catch (err: any) {
       const code: string = err?.code ?? '';
