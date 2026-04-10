@@ -272,8 +272,11 @@ export default function MediaGalleryScreen() {
 
     try {
       // Step 3: open our own AVCaptureVideoDataOutput session.
-      // 1 500 ms delay gives Kobiton time to start injecting into the output.
-      const b64: string = await mod.captureFrame(1500);
+      // 2500 ms delay (enforced as a minimum by the native module too) gives
+      // Kobiton time to start injecting and lets AVCaptureSession negotiate its
+      // output format — log evidence shows 1500ms was insufficient when a prior
+      // session (receipt camera) exited uncleanly (CATransaction warning).
+      const b64: string = await mod.captureFrame(2500);
       if (!b64) throw new Error('captureFrame returned empty base64 data');
 
       // Step 4: decode the JPEG with jsQR

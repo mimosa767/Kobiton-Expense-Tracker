@@ -2503,14 +2503,27 @@ extern void RCTRegisterModule(Class);
 //
 //   delayMs — milliseconds to wait after session start before arming the
 //             capture. The Kobiton SDK needs a moment to start injecting
-//             frames into the AVCaptureVideoDataOutput delegate. 1200–1500 ms
-//             is recommended for reliable injection on first open.
+//             frames into the AVCaptureVideoDataOutput delegate. A minimum
+//             of 2500ms is enforced (see below).
 //
 //   An additional 4-second timeout fires if no frame arrives after arming.
 RCT_EXPORT_METHOD(captureFrame:(double)delayMs
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 {
+    // ── Minimum arm delay ─────────────────────────────────────────────────────
+    // Root cause confirmed from device log (Apr 10 09:08:22, session 8548140-ios):
+    // When a prior AVCaptureSession (receipt camera) did not tear down cleanly
+    // (logged: "CoreAnimation: deleted thread with uncommitted CATransaction" at
+    // 09:08:05), the subsequent AVCaptureSession needs extra time to negotiate
+    // its output format and deliver valid (non-zero-dimension) sample buffers.
+    // At 1500ms the arm fired before valid buffers arrived; the zero-size buffer
+    // caused the NSInternalInconsistencyException crash in UIGraphics.m:410.
+    // The zero-size guard in captureOutput:didOutputSampleBuffer: also covers
+    // this, but a longer arm delay is defence-in-depth — on most devices the
+    // injected frame is actually available earlier, so the extra 1s is harmless.
+    double effectiveDelay = MAX(delayMs, 2500.0);
+
     // Guard: don't start a second capture while one is already in progress.
     if (_session && _session.isRunning) {
         reject(@"E_BUSY", @"A capture is already in progress — wait for it to finish", nil);
@@ -2552,14 +2565,14 @@ RCT_EXPORT_METHOD(captureFrame:(double)delayMs
     [_session addOutput:_output];
 
     [_session startRunning];
-    NSLog(@"[KOBITON] KobitonCaptureModule: session started — arming in %.0f ms", delayMs);
+    NSLog(@"[KOBITON] KobitonCaptureModule: session started — arming in %.0f ms (requested %.0f ms)", effectiveDelay, delayMs);
 
-    // Arm after delayMs: by this point Kobiton should be injecting into _output.
+    // Arm after effectiveDelay: by this point Kobiton should be injecting into _output.
     // Must capture weakSelf into a strong local before accessing ivars —
     // clang forbids dereferencing a __weak pointer directly (race condition).
     __weak KobitonCaptureModule *weakSelf = self;
     dispatch_after(
-        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayMs * NSEC_PER_MSEC)),
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(effectiveDelay * NSEC_PER_MSEC)),
         dispatch_get_main_queue(),
         ^{
             KobitonCaptureModule *s = weakSelf;
@@ -2569,8 +2582,8 @@ RCT_EXPORT_METHOD(captureFrame:(double)delayMs
         }
     );
 
-    // Timeout: reject if no frame arrives within delayMs + 4000 ms
-    double timeoutSec = (delayMs + 4000.0) / 1000.0;
+    // Timeout: reject if no frame arrives within effectiveDelay + 4000 ms
+    double timeoutSec = (effectiveDelay + 4000.0) / 1000.0;
     dispatch_after(
         dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeoutSec * NSEC_PER_SEC)),
         dispatch_get_main_queue(),
@@ -2591,17 +2604,45 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 {
     if (!_armed || _settled) return;
 
-    // Disarm immediately so we capture exactly one frame
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    if (!imageBuffer) return;
+
+    size_t width  = CVPixelBufferGetWidth(imageBuffer);
+    size_t height = CVPixelBufferGetHeight(imageBuffer);
+
+    // ── Zero-size guard ───────────────────────────────────────────────────────
+    // Root cause confirmed from device log (Apr 10 09:08:22, session 8548140-ios):
+    //   *** Assertion failure in UIGraphics.m:410
+    //   *** NSInternalInconsistencyException: UIGraphicsBeginImageContext() failed
+    //       to allocate CGBitmapContext: size={0, 0}, scale=3.000000
+    //
+    // The second AVCaptureSession opened at 09:08:20 after the receipt camera
+    // session closed at 09:08:00 with an uncommitted CATransaction (logged at
+    // 09:08:05: "CoreAnimation: deleted thread with uncommitted CATransaction").
+    // While addInput: was still in progress (09:08:22), the delegate received
+    // its first sample buffer — dimensions {0, 0} because AVCaptureSession had
+    // not yet negotiated its output format.
+    //
+    // Disarming (_settled=YES) on that first zero-size buffer would cause the
+    // crash inside CGBitmapContextCreate (NULL context) → CGBitmapContextCreateImage
+    // → UIImage → UIImageJPEGRepresentation → internal UIGraphicsBeginImageContext.
+    //
+    // Fix: skip zero-size buffers without disarming. The next buffer (with valid
+    // dimensions) will be captured instead. _armed stays YES so the delegate
+    // continues processing arriving frames until a valid one appears.
+    if (width == 0 || height == 0) {
+        NSLog(@"[KOBITON] KobitonCaptureModule: skipping zero-size buffer (session still negotiating format)");
+        return;
+    }
+
+    // Disarm immediately so we capture exactly one valid frame
     _armed   = NO;
     _settled = YES;
-    NSLog(@"[KOBITON] KobitonCaptureModule: frame captured — converting to JPEG");
+    NSLog(@"[KOBITON] KobitonCaptureModule: frame captured (%zux%zu) — converting to JPEG", width, height);
 
-    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
     // kCVPixelBufferLock_ReadOnly is the correct constant (not kCVPixelBufferLockFlags_ReadOnly)
     CVPixelBufferLockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
 
-    size_t width       = CVPixelBufferGetWidth(imageBuffer);
-    size_t height      = CVPixelBufferGetHeight(imageBuffer);
     size_t bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer);
     void  *baseAddress = CVPixelBufferGetBaseAddress(imageBuffer);
 
