@@ -1,0 +1,6 @@
+framework module KobitonSdk {
+  umbrella header "KobitonSdk.h"
+  export *
+
+  module * { export * }
+}

@@ -234,6 +234,32 @@ export default function MediaGalleryScreen() {
   //   6. Re-mount CameraView.
   async function captureAndDecodeIOS() {
     if (isCapturing) return;
+
+    // ── Null-guard FIRST — before any state mutation ──────────────────────────
+    // Device log (iPhone 14 Plus, session 8545105) confirms app exits at
+    // 15:42:47 with zero AVCaptureSession activity — KobitonCaptureModule was
+    // absent from the built .ipa (KobitonCaptureModule.m missing from Xcode
+    // Sources build phase after an incomplete expo prebuild).
+    //
+    // The original ordering was: setCameraVisible(false) → 600ms wait → null check.
+    // When the module is absent, the camera is already torn down before the error
+    // fires. The finally block tries to restore it, but if the component unmounted
+    // during the 600ms wait (which happens on the crash path) the state update is
+    // a no-op → user lands on a black screen with no recovery.
+    //
+    // Moving the null check HERE (before any state change) means:
+    //   • No state is mutated if the module is absent → camera stays visible.
+    //   • The Alert appears immediately with actionable text.
+    //   • The app does NOT crash — the user can still use the rest of the app.
+    const mod = NativeModules.KobitonCaptureModule;
+    if (!mod) {
+      Alert.alert(
+        'Module Not Available',
+        'KobitonCaptureModule is not registered in this build. The app needs to be rebuilt with expo prebuild --clean to include the iOS capture native module.'
+      );
+      return;
+    }
+
     setIsCapturing(true);
     // Step 1: unmount CameraView to free the AVCaptureSession hardware lock
     setCameraVisible(false);
@@ -245,13 +271,6 @@ export default function MediaGalleryScreen() {
     await new Promise<void>(resolve => setTimeout(resolve, 600));
 
     try {
-      const mod = NativeModules.KobitonCaptureModule;
-      if (!mod) {
-        throw new Error(
-          'KobitonCaptureModule is not registered — a new build with the updated plugin is required.'
-        );
-      }
-
       // Step 3: open our own AVCaptureVideoDataOutput session.
       // 1 500 ms delay gives Kobiton time to start injecting into the output.
       const b64: string = await mod.captureFrame(1500);
