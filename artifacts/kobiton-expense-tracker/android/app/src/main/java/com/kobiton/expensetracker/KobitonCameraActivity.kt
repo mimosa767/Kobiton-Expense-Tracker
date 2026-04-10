@@ -78,7 +78,19 @@ class KobitonCameraActivity : AppCompatActivity() {
         private const val CAPTURE_HEIGHT = 720
         private const val MAX_KOBITON_RETRIES = 3
         private const val RETRY_DELAY_MS      = 300L
-        private const val INJECTION_WAIT_MS   = 800L
+        //
+        // WHY 2 000 ms:
+        //   After kobiton.hardware.camera2 opens its session and setRepeatingRequest()
+        //   starts, the Kobiton ImageInjectionClient must:
+        //     1. Connect to the platform WebSocket (typically already open)
+        //     2. Pipeline the injected frame into the SurfaceTexture
+        //     3. SurfaceTexture.updateTexImage() renders it so getBitmap() sees it
+        //   This typically takes 500–1 500 ms on a Pixel 6.  iOS uses 1 500 ms for
+        //   the equivalent KobitonCaptureModule.captureFrame() call; we use 2 000 ms
+        //   for additional safety (Android's camera2 session startup is slightly slower).
+        //   If the wait is too short, getBitmap() returns the last LIVE frame (or null
+        //   in auto-capture mode where there is no live-camera baseline).
+        private const val INJECTION_WAIT_MS   = 2_000L
     }
 
     private lateinit var textureView: TextureView
