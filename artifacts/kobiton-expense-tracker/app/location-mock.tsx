@@ -90,6 +90,12 @@ export default function LocationMockScreen() {
     let subscription: Location.LocationSubscription | null = null;
     let cancelled = false;
 
+    // Clear any stale location from a previous Kobiton session before acquiring
+    // a fresh fix.  Without this, FusedLocationProvider's mock-location cache
+    // (never cleared after setMockLocation) would cause Rome coordinates from a
+    // prior session to stay on screen until the first new update arrives.
+    setLocation(null);
+    setStatus('idle');
     setErrorMsg(null);
     startPulse();
 
@@ -148,7 +154,7 @@ export default function LocationMockScreen() {
         //   to that rate avoids the backpressure log entirely and ensures the first
         //   injected fix is always delivered.
         subscription = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 0 },
+          { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 2000, distanceInterval: 0 },
           async (pos) => {
             if (cancelled) return;
             const { city, country } = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
