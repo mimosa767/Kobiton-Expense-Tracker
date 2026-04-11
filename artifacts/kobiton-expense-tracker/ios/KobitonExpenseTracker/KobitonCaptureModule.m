@@ -3,6 +3,7 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 
 extern void RCTRegisterModule(Class);
 
@@ -36,6 +37,10 @@ extern void RCTRegisterModule(Class);
     BOOL                          _armed;    // YES = capture the next arriving frame
     BOOL                          _settled;  // YES = promise already resolved/rejected
     dispatch_queue_t              _captureQueue;
+    // ── Native memory stress ivars ────────────────────────────────────────────
+    void                         *_memBuffer;
+    size_t                        _memBytes;
+    NSTimer                      *_memThrashTimer;
 }
 
 + (NSString *)moduleName { return @"KobitonCaptureModule"; }
@@ -243,6 +248,102 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
             self->_reject  = nil;
         }
     });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Native memory stress — malloc() path
+//
+// WHY malloc() instead of JS Uint8Array:
+//   JS Uint8Array lives in the JavaScriptCore/Hermes heap.  iOS tracks app
+//   memory via phys_footprint (task_info), which does NOT consistently account
+//   for JSC heap pages — the OS may defer committing them physically.
+//   Kobiton's System Metrics panel reads phys_footprint, so JS-allocated memory
+//   is invisible to it.  malloc() allocates from the native heap and IS counted
+//   in phys_footprint immediately, so it shows up in Kobiton's panel.
+//
+// WHY page-write loop after malloc:
+//   malloc() on iOS reserves virtual address space but doesn't commit physical
+//   pages until they are first touched (demand paging).  Writing one byte per
+//   4 KB page forces the OS to commit every page physically, so the full
+//   allocation appears in phys_footprint immediately.
+//
+// WHY NSTimer thrash loop:
+//   iOS jetsam can compress or evict clean pages under memory pressure.
+//   Touching every page every 100 ms keeps them "dirty" in the compressed memory
+//   subsystem, preventing jetsam from reclaiming them and ensuring the allocation
+//   stays visible in Kobiton's panel for the duration of the stress test.
+// ─────────────────────────────────────────────────────────────────────────────
+
+RCT_EXPORT_METHOD(allocateNativeMemory:(double)megabytes
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+    // Release any previous allocation before starting a new one.
+    [self releaseNativeMemoryInternal];
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        size_t bytes = (size_t)(megabytes * 1024 * 1024);
+        void *buffer = malloc(bytes);
+        if (!buffer) {
+            resolve(@(0));
+            return;
+        }
+        // Touch one byte per 4 KB page to commit all physical pages immediately.
+        // XOR with 0xA5 produces a non-compressible pattern that prevents zRAM.
+        uint8_t *p = (uint8_t *)buffer;
+        for (size_t i = 0; i < bytes; i += 4096) {
+            p[i] = (uint8_t)(i ^ 0xA5);
+        }
+        self->_memBuffer = buffer;
+        self->_memBytes  = bytes;
+
+        // Start the thrash timer on the main run loop so NSTimer fires reliably.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self startMemoryThrash];
+            NSLog(@"[KOBITON] KobitonCaptureModule: allocated %.0f MB native (malloc) — thrash timer started", megabytes);
+            resolve(@(megabytes));
+        });
+    });
+}
+
+RCT_EXPORT_METHOD(releaseNativeMemory:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+    [self releaseNativeMemoryInternal];
+    NSLog(@"[KOBITON] KobitonCaptureModule: native memory released");
+    resolve(nil);
+}
+
+- (void)releaseNativeMemoryInternal {
+    [_memThrashTimer invalidate];
+    _memThrashTimer = nil;
+    if (_memBuffer) {
+        free(_memBuffer);
+        _memBuffer = NULL;
+    }
+    _memBytes = 0;
+}
+
+- (void)startMemoryThrash {
+    [_memThrashTimer invalidate];
+    // Touch one byte per 4 KB page every 100 ms.
+    // Work per tick: (bytes / 4096) byte reads+writes.
+    // For 300 MB: (300×1024×1024 / 4096) = 76,800 writes ≈ 76 µs — negligible.
+    // This keeps every page resident in phys_footprint and prevents jetsam
+    // from compressing them out of Kobiton's System Metrics reading.
+    __weak KobitonCaptureModule *weakSelf = self;
+    _memThrashTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
+                                                      repeats:YES
+                                                        block:^(NSTimer *t) {
+        KobitonCaptureModule *s = weakSelf;
+        if (!s || !s->_memBuffer) { [t invalidate]; return; }
+        uint8_t *p     = (uint8_t *)s->_memBuffer;
+        uint8_t  cycle = (uint8_t)(CACurrentMediaTime() * 10);
+        size_t   total = s->_memBytes;
+        for (size_t i = 0; i < total; i += 4096) {
+            p[i] ^= cycle;
+        }
+    }];
 }
 
 + (BOOL)requiresMainQueueSetup { return NO; }

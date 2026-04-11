@@ -76,6 +76,26 @@ const AndroidStress: NativeStressModule | null =
     ? (NativeModules.KobitonCameraModule as unknown as NativeStressModule)
     : null;
 
+// ─── iOS native memory stress module ──────────────────────────────────────────
+//
+// KobitonCaptureModule (the same module used for image injection) now also
+// exposes allocateNativeMemory / releaseNativeMemory on iOS.  These call
+// malloc() directly, which allocates from the native heap and IS counted in
+// phys_footprint — exactly what Kobiton's System Metrics panel reads.
+//
+// JS Uint8Array (the previous iOS path) lives in the JSC/Hermes heap, which
+// iOS does NOT consistently include in phys_footprint, so it was invisible.
+
+interface IOSNativeMemModule {
+  allocateNativeMemory(megabytes: number): Promise<number>;
+  releaseNativeMemory(): Promise<void>;
+}
+
+const iOSStress: IOSNativeMemModule | null =
+  Platform.OS === 'ios' && NativeModules.KobitonCaptureModule
+    ? (NativeModules.KobitonCaptureModule as unknown as IOSNativeMemModule)
+    : null;
+
 // ─── JS CPU load (iOS, and Android fallback if native module unavailable) ─────
 //
 // Each chain saturates the JS thread for BURST_MS milliseconds then yields via
@@ -252,13 +272,17 @@ export default function SystemMetricsScreen() {
 
   /** Stop everything safely — native + JS, never throws. */
   function safeStopAll() {
-    // JS CPU (iOS) / JS fallback memory cleanup — always safe to call.
+    // JS CPU chains + JS fallback memory — always safe to call.
     try { stopCPULoad(); } catch (_) {}
     try { releaseMemory(); } catch (_) {}
     if (AndroidStress) {
       // Android: stop native JVM CPU threads + release native ByteBuffer memory.
       try { AndroidStress.stopCpuStress?.()?.catch?.(() => {}); } catch (_) {}
       try { AndroidStress.releaseNativeMemory?.()?.catch?.(() => {}); } catch (_) {}
+    }
+    if (iOSStress) {
+      // iOS: free the malloc() buffer and stop the NSTimer thrash loop.
+      try { iOSStress.releaseNativeMemory?.()?.catch?.(() => {}); } catch (_) {}
     }
   }
 
@@ -366,12 +390,36 @@ export default function SystemMetricsScreen() {
       }
     }
 
+    if (!usedNative && iOSStress) {
+      // ── iOS: JS CPU chains + native malloc() memory ──────────────────────────
+      //
+      // CPU: JS setTimeout chains (startCPULoad) are used on iOS because there
+      // is no separate native CPU module — each chain saturates the JS thread for
+      // BURST_MS ms then yields, producing visible CPU spikes in Kobiton's panel.
+      //
+      // Memory: KobitonCaptureModule.allocateNativeMemory() calls malloc() +
+      // touches every page + starts an NSTimer thrash loop.  This puts memory
+      // directly into phys_footprint (what Kobiton reads), whereas JS Uint8Array
+      // lived in the JSC heap and was invisible to Kobiton's System Metrics.
+      startCPULoad(cfg.concurrency);
+      setAllocating(true);
+      try {
+        const allocated = await iOSStress.allocateNativeMemory(cfg.memoryMB);
+        setActualMemMB(allocated);
+        usedNative = true;
+      } catch (err) {
+        console.warn('[StressTest] iOS allocateNativeMemory failed, falling back to JS memory:', err);
+      } finally {
+        setAllocating(false);
+      }
+    }
+
     if (!usedNative) {
-      // ── JS path: iOS primary; Android if native module unavailable ───────────
+      // ── JS path: fallback if native module unavailable ────────────────────────
+      // Covers: Expo Go dev builds (no native module prebuild), Android missing
+      // module, iOS KobitonCaptureModule not registered yet.
       _memRunning = true;
       if (!AndroidStress) {
-        // Native module unavailable (e.g. dev build without prebuild) — use
-        // JS CPU chains for iOS or missing-module Android path.
         startCPULoad(cfg.concurrency);
       }
       await allocateMemory(cfg.memoryMB);
