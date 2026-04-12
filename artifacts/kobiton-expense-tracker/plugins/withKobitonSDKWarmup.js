@@ -1,16 +1,6 @@
 /**
  * Expo Config Plugin – Kobiton SDK Warmup
  *
- * ⚠ TODO (post-validation): Before relying on this plugin for production
- * builds, confirm the warmup works correctly in a live Kobiton session:
- *   1. Install the Android APK built from commit 67c7f84 on a Kobiton device.
- *   2. Start a manual session WITHOUT opening the camera screen first.
- *   3. Attempt image injection — the "Please ensure your app integrates
- *      Kobiton SDK" warning should NOT appear.
- *   4. If it does appear, the anchor string or the CameraManager reflection
- *      call may need adjustment before this plugin is authoritative.
- * Once validated, remove this TODO block.
- *
  * Injects a background-thread CameraManager.getInstance() call into
  * MainApplication.kt at expo prebuild time, placed immediately after
  * ApplicationLifecycleDispatcher.onApplicationCreate(this) inside onCreate().
