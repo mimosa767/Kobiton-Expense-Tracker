@@ -23,13 +23,25 @@ function getCategoryColor(category: string): string {
 
 function formatCurrency(amount: number, currency: string): string {
   const symbol = currency.split('-')[1] ?? '';
-  return `${symbol}${amount.toFixed(2)}`;
+  return `${symbol}${amount.toFixed(2)} ${currency}`;
 }
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return dateStr;
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
+}
+
+function buildCardLabel(expense: Expense): string {
+  const parts: string[] = [
+    expense.head,
+    expense.category,
+    formatCurrency(expense.amount, expense.currency),
+    formatDate(expense.date),
+  ];
+  if (expense.recurring) parts.push('recurring');
+  if (expense.attachmentUri) parts.push('has receipt');
+  return parts.join(', ');
 }
 
 export function ExpenseCard({ expense, onPress, onLongPress, testID }: Props) {
@@ -42,15 +54,17 @@ export function ExpenseCard({ expense, onPress, onLongPress, testID }: Props) {
       onLongPress={onLongPress ? () => onLongPress(expense) : undefined}
       activeOpacity={0.85}
       testID={testID}
+      accessible={true}
       accessibilityRole="button"
-      accessibilityLabel={`${expense.head} expense, ${formatCurrency(expense.amount, expense.currency)}`}
+      accessibilityLabel={buildCardLabel(expense)}
+      accessibilityHint="Double-tap to view expense details"
     >
-      <View style={styles.row}>
+      <View style={styles.row} importantForAccessibility="no-hide-descendants">
         <View style={styles.left}>
           <View style={styles.titleRow}>
             <Text style={styles.head} numberOfLines={1}>{expense.head}</Text>
             {expense.recurring && (
-              <View style={styles.recurringBadge}>
+              <View style={styles.recurringBadge} accessible={false}>
                 <Text style={styles.recurringText}>↻</Text>
               </View>
             )}
@@ -62,12 +76,12 @@ export function ExpenseCard({ expense, onPress, onLongPress, testID }: Props) {
           <Text style={styles.currency}>{expense.currency}</Text>
         </View>
       </View>
-      <View style={styles.footer}>
+      <View style={styles.footer} importantForAccessibility="no-hide-descendants">
         <View style={[styles.categoryBadge, { backgroundColor: catColor + '18' }]}>
           <Text style={[styles.categoryText, { color: catColor }]}>{expense.category}</Text>
         </View>
         {expense.attachmentUri && (
-          <View style={styles.attachBadge}>
+          <View style={styles.attachBadge} accessible={false}>
             <Text style={styles.attachText}>📎</Text>
           </View>
         )}

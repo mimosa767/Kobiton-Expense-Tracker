@@ -318,7 +318,7 @@ function NativeDatePicker({ value, onChange }: { value: Date; onChange: (d: Date
           testID="date-picker-overlay"
           accessibilityLabel="Close date picker"
         />
-        <View style={datePickerStyles.sheet} testID="date-picker-sheet">
+        <View style={datePickerStyles.sheet} testID="date-picker-sheet" accessibilityViewIsModal={true}>
           <View style={datePickerStyles.header}>
             <TouchableOpacity
               onPress={() => setOpen(false)}

@@ -378,9 +378,9 @@ export default function MediaGalleryScreen() {
 
     if (permission === null) {
       return (
-        <View style={styles.permBox}>
-          <ActivityIndicator size="large" color={Colors.primary} />
-          <Text style={styles.permTitle}>Requesting camera access…</Text>
+        <View style={styles.permBox} accessible={true} accessibilityLabel="Requesting camera access">
+          <ActivityIndicator size="large" color={Colors.primary} accessibilityLabel="Requesting camera permission" />
+          <Text style={styles.permTitle} accessible={false}>Requesting camera access…</Text>
         </View>
       );
     }
@@ -436,7 +436,7 @@ export default function MediaGalleryScreen() {
               />
             ) : (
               <View style={[{ flex: 1 }, styles.cameraPlaceholder]}>
-                <ActivityIndicator size="large" color={Colors.primary} />
+                <ActivityIndicator size="large" color={Colors.primary} accessibilityLabel="Starting camera" />
               </View>
             )}
             <View style={styles.scanOverlay} pointerEvents="box-none">
@@ -464,9 +464,9 @@ export default function MediaGalleryScreen() {
                 accessibilityRole="button"
               >
                 {isCapturing ? (
-                  <ActivityIndicator size="small" color={Colors.white} />
+                  <ActivityIndicator size="small" color={Colors.white} accessibilityLabel="Decoding QR code" />
                 ) : (
-                  <Feather name="camera" size={18} color={Colors.white} />
+                  <Feather name="camera" size={18} color={Colors.white} accessible={false} />
                 )}
                 <Text style={styles.captureBtnText}>
                   {isCapturing ? 'Decoding…' : 'Capture & Decode'}

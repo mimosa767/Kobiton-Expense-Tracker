@@ -240,7 +240,12 @@ export default function LocationMockScreen() {
               />
             </Animated.View>
             <View style={styles.statusTextCol}>
-              <Text style={styles.statusLabel} testID="location-status-text">
+              <Text
+                style={styles.statusLabel}
+                testID="location-status-text"
+                accessibilityLiveRegion="polite"
+                accessibilityRole={status === 'denied' || status === 'error' ? 'alert' : 'text'}
+              >
                 {status === 'idle' ? 'Ready' :
                  status === 'requesting' ? 'Requesting permission…' :
                  status === 'acquiring' ? 'Acquiring GPS signal…' :
@@ -255,7 +260,7 @@ export default function LocationMockScreen() {
               )}
               {isLoading && (
                 <View style={styles.loadingRow}>
-                  <ActivityIndicator size="small" color={Colors.accent} />
+                  <ActivityIndicator size="small" color={Colors.accent} accessibilityLabel="Loading" />
                   <Text style={styles.statusSub}>
                     {status === 'requesting' ? 'Waiting for permission…' : 'Reading device GPS…'}
                   </Text>

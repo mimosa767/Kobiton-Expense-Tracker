@@ -332,7 +332,7 @@ export default function ExpensesScreen() {
       {/* Search bar */}
       <View style={styles.searchRow}>
         <View style={styles.searchBox}>
-          <Feather name="search" size={16} color={Colors.textMuted} style={styles.searchIcon} />
+          <Feather name="search" size={16} color={Colors.textMuted} style={styles.searchIcon} accessible={false} />
           <TextInput
             style={styles.searchInput}
             value={searchQuery}
@@ -345,8 +345,13 @@ export default function ExpensesScreen() {
             accessibilityLabel="Search expenses"
           />
           {searchQuery.length > 0 && Platform.OS !== 'ios' && (
-            <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Feather name="x" size={14} color={Colors.textMuted} />
+            <TouchableOpacity
+              onPress={() => setSearchQuery('')}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Clear search"
+              accessibilityRole="button"
+            >
+              <Feather name="x" size={14} color={Colors.textMuted} accessible={false} />
             </TouchableOpacity>
           )}
         </View>
@@ -354,7 +359,9 @@ export default function ExpensesScreen() {
           style={styles.sortBtn}
           onPress={cycleSort}
           testID="sort-button"
-          accessibilityLabel={`Sort by ${SORT_LABELS[sortKey]}`}
+          accessibilityRole="button"
+          accessibilityLabel={`Sort: ${SORT_LABELS[sortKey]}`}
+          accessibilityHint="Tap to cycle through sort options"
         >
           <Feather name={SORT_ICONS[sortKey]} size={14} color={Colors.primary} />
           <Text style={styles.sortBtnText}>{SORT_LABELS[sortKey]}</Text>
@@ -381,8 +388,10 @@ export default function ExpensesScreen() {
               ]}
               onPress={() => setActiveCategory(cat)}
               testID={`filter-${cat.toLowerCase()}`}
-              accessibilityRole="button"
+              accessibilityRole="tab"
               accessibilityLabel={`Filter by ${cat}`}
+              accessibilityState={{ selected: isActive }}
+              accessibilityHint={isActive ? 'Currently selected filter' : 'Tap to filter by this category'}
             >
               <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
                 {cat}
@@ -432,8 +441,9 @@ export default function ExpensesScreen() {
         testID="expenses-add-fab"
         accessibilityRole="button"
         accessibilityLabel="Add expense"
+        accessibilityHint="Opens a form to create a new expense"
       >
-        <Feather name="plus" size={28} color={Colors.white} />
+        <Feather name="plus" size={28} color={Colors.white} accessible={false} />
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -441,7 +451,8 @@ export default function ExpensesScreen() {
         onPress={handleVersionTap}
         activeOpacity={1}
         testID="version-badge"
-        accessibilityLabel="App version"
+        accessibilityLabel="App version 1.0.0"
+        accessibilityRole="text"
       >
         <Text style={styles.versionText}>v1.0.0</Text>
       </TouchableOpacity>

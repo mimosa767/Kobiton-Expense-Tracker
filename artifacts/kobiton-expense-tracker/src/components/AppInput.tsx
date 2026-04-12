@@ -23,9 +23,11 @@ export function AppInput({ label, error, required, rightIcon, isPassword, style,
   const [focused, setFocused] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  const inputLabel = error ? `${label}, error: ${error}` : label;
+
   return (
     <View style={styles.wrapper}>
-      <Text style={styles.label}>
+      <Text style={styles.label} accessible={false}>
         {label}
         {required && <Text style={styles.required}> *</Text>}
       </Text>
@@ -37,7 +39,7 @@ export function AppInput({ label, error, required, rightIcon, isPassword, style,
           onBlur={() => setFocused(false)}
           secureTextEntry={isPassword && !showPassword}
           testID={testID}
-          accessibilityLabel={label}
+          accessibilityLabel={inputLabel}
           {...rest}
         />
         {isPassword && (
@@ -45,6 +47,7 @@ export function AppInput({ label, error, required, rightIcon, isPassword, style,
             onPress={() => setShowPassword((v) => !v)}
             style={styles.iconBtn}
             accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+            accessibilityRole="button"
             testID={testID ? `${testID}-show-password` : 'show-password-toggle'}
           >
             <Feather name={showPassword ? 'eye-off' : 'eye'} size={18} color={Colors.textSecondary} />
@@ -52,7 +55,15 @@ export function AppInput({ label, error, required, rightIcon, isPassword, style,
         )}
         {rightIcon && !isPassword && <View style={styles.iconBtn}>{rightIcon}</View>}
       </View>
-      {!!error && <Text style={styles.error}>{error}</Text>}
+      {!!error && (
+        <Text
+          style={styles.error}
+          accessibilityLiveRegion="assertive"
+          accessibilityRole="alert"
+        >
+          {error}
+        </Text>
+      )}
     </View>
   );
 }

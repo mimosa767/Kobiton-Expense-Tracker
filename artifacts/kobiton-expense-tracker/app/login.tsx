@@ -228,13 +228,21 @@ export default function LoginScreen() {
       />
 
       {loginError && (
-        <View style={styles.errorBox} testID="login-error-box">
+        <View
+          style={styles.errorBox}
+          testID="login-error-box"
+          accessible={true}
+          accessibilityRole="alert"
+          accessibilityLiveRegion="assertive"
+          accessibilityLabel={loginError}
+        >
           <Feather
             name={Platform.OS === 'web' ? 'info' : 'alert-circle'}
             size={14}
             color={Platform.OS === 'web' ? Colors.accent : Colors.error}
+            accessible={false}
           />
-          <Text style={[styles.errorText, Platform.OS === 'web' && styles.infoText]} testID="login-error-text">
+          <Text style={[styles.errorText, Platform.OS === 'web' && styles.infoText]} testID="login-error-text" accessible={false}>
             {loginError}
           </Text>
         </View>
@@ -242,7 +250,7 @@ export default function LoginScreen() {
 
       {biometricAvailable && (
         <View style={styles.biometricRow}>
-          <Feather name="shield" size={16} color={Colors.primary} />
+          <Feather name="shield" size={16} color={Colors.primary} accessible={false} />
           <Text style={styles.biometricLabel}>Enable Biometric on Next Login</Text>
           <Controller
             control={control}

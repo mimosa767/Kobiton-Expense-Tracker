@@ -159,7 +159,7 @@ export default function ExpenseDetailScreen() {
         {expense.attachmentUri && (
           <View style={styles.receiptCard} testID="detail-receipt-card">
             <View style={styles.receiptHeader}>
-              <Feather name="paperclip" size={16} color={Colors.textSecondary} />
+              <Feather name="paperclip" size={16} color={Colors.textSecondary} accessible={false} />
               <Text style={styles.receiptTitle}>Receipt</Text>
               {expense.attachmentName && (
                 <Text style={styles.receiptName} numberOfLines={1}>{expense.attachmentName}</Text>

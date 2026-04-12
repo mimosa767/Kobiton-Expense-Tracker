@@ -29,7 +29,7 @@ export function TopBar({ title, onMenuPress, onBackPress, rightAction, testID, b
             accessibilityLabel="Go back"
             testID={backTestID ?? 'topbar-back-btn'}
           >
-            <Feather name="arrow-left" size={22} color={Colors.white} />
+            <Feather name="arrow-left" size={22} color={Colors.white} accessible={false} />
           </TouchableOpacity>
         ) : onMenuPress ? (
           <TouchableOpacity
@@ -39,15 +39,19 @@ export function TopBar({ title, onMenuPress, onBackPress, rightAction, testID, b
             accessibilityLabel="Open menu"
             testID={menuTestID ?? 'topbar-menu-btn'}
           >
-            <Feather name="menu" size={22} color={Colors.white} />
+            <Feather name="menu" size={22} color={Colors.white} accessible={false} />
           </TouchableOpacity>
         ) : (
-          <View style={styles.iconBtn} />
+          <View style={styles.iconBtn} accessible={false} />
         )}
-        <Text style={styles.title} numberOfLines={1}>
+        <Text
+          style={styles.title}
+          numberOfLines={1}
+          accessibilityRole="header"
+        >
           {title}
         </Text>
-        <View style={styles.right}>{rightAction ?? <View style={styles.iconBtn} />}</View>
+        <View style={styles.right} accessible={false}>{rightAction ?? <View style={styles.iconBtn} />}</View>
       </View>
     </View>
   );

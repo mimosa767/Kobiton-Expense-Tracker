@@ -210,7 +210,7 @@ export default function KobitonSDKScreen() {
           )}
 
           <View style={styles.infoBar}>
-            <Feather name="info" size={13} color={Colors.primary} />
+            <Feather name="info" size={13} color={Colors.primary} accessible={false} />
             <Text style={styles.infoText}>
               This screen logs session events in JavaScript.{' '}
               The <Text style={styles.infoCode}>KobitonLAContext</Text> (biometrics) and{' '}
@@ -228,6 +228,14 @@ export default function KobitonSDKScreen() {
               style={[styles.tab, activeTab === tab && styles.tabActive]}
               onPress={() => setActiveTab(tab)}
               testID={`sdk-tab-${tab}`}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === tab }}
+              accessibilityLabel={
+                tab === 'session' ? 'Session'
+                : tab === 'events' ? `Events, ${status.events.length} items`
+                : tab === 'network' ? `Network, ${status.networkLogs.length} items`
+                : 'Biometrics'
+              }
             >
               <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
                 {tab === 'session' ? 'Session'
@@ -382,7 +390,7 @@ export default function KobitonSDKScreen() {
             {/* iOS Build Guide */}
             <View style={[styles.card, styles.guideCard]}>
               <View style={styles.guideHeader}>
-                <Feather name="package" size={16} color={Colors.primary} />
+                <Feather name="package" size={16} color={Colors.primary} accessible={false} />
                 <Text style={styles.guideTitle}>iOS Build Setup</Text>
               </View>
               <Text style={styles.guideBody}>
@@ -409,7 +417,7 @@ export default function KobitonSDKScreen() {
             {/* iOS Biometric SDK Guide */}
             <View style={[styles.card, styles.iosBioCard]}>
               <View style={styles.guideHeader}>
-                <Feather name="shield" size={16} color={Colors.categoryOffice} />
+                <Feather name="shield" size={16} color={Colors.categoryOffice} accessible={false} />
                 <Text style={[styles.guideTitle, { color: Colors.categoryOffice }]}>iOS Biometric SDK</Text>
               </View>
               <Text style={styles.guideBody}>
@@ -443,7 +451,7 @@ export default function KobitonSDKScreen() {
             {/* iOS Image Injection Guide */}
             <View style={[styles.card, styles.iosInjectionCard]}>
               <View style={styles.guideHeader}>
-                <Feather name="camera" size={16} color={Colors.categoryTravel} />
+                <Feather name="camera" size={16} color={Colors.categoryTravel} accessible={false} />
                 <Text style={[styles.guideTitle, { color: Colors.categoryTravel }]}>iOS Image Injection SDK</Text>
               </View>
               <Text style={styles.guideBody}>
@@ -476,7 +484,7 @@ export default function KobitonSDKScreen() {
             {/* Android Image Injection Guide */}
             <View style={[styles.card, styles.androidGuideCard]}>
               <View style={styles.guideHeader}>
-                <Feather name="camera" size={16} color={Colors.accent} />
+                <Feather name="camera" size={16} color={Colors.accent} accessible={false} />
                 <Text style={[styles.guideTitle, { color: Colors.accent }]}>Android Image Injection SDK</Text>
               </View>
               <Text style={styles.guideBody}>
@@ -511,7 +519,7 @@ export default function KobitonSDKScreen() {
             {/* Android Biometric SDK Guide */}
             <View style={[styles.card, styles.androidBioCard]}>
               <View style={styles.guideHeader}>
-                <Feather name="shield" size={16} color={Colors.categoryMeals} />
+                <Feather name="shield" size={16} color={Colors.categoryMeals} accessible={false} />
                 <Text style={[styles.guideTitle, { color: Colors.categoryMeals }]}>Android Biometric SDK</Text>
               </View>
               <Text style={styles.guideBody}>
@@ -565,8 +573,8 @@ export default function KobitonSDKScreen() {
           <View style={styles.card}>
             <View style={styles.logHeader}>
               <Text style={styles.sectionTitle}>Event Log</Text>
-              <TouchableOpacity onPress={handleClearLogs} style={styles.clearBtn} testID="sdk-clear-events-btn">
-                <Feather name="trash-2" size={14} color={Colors.textMuted} />
+              <TouchableOpacity onPress={handleClearLogs} style={styles.clearBtn} testID="sdk-clear-events-btn" accessibilityLabel="Clear event log" accessibilityRole="button">
+                <Feather name="trash-2" size={14} color={Colors.textMuted} accessible={false} />
                 <Text style={styles.clearBtnText}>Clear</Text>
               </TouchableOpacity>
             </View>
@@ -594,8 +602,8 @@ export default function KobitonSDKScreen() {
           <View style={styles.card}>
             <View style={styles.logHeader}>
               <Text style={styles.sectionTitle}>Network Log</Text>
-              <TouchableOpacity onPress={handleClearLogs} style={styles.clearBtn} testID="sdk-clear-network-btn">
-                <Feather name="trash-2" size={14} color={Colors.textMuted} />
+              <TouchableOpacity onPress={handleClearLogs} style={styles.clearBtn} testID="sdk-clear-network-btn" accessibilityLabel="Clear network log" accessibilityRole="button">
+                <Feather name="trash-2" size={14} color={Colors.textMuted} accessible={false} />
                 <Text style={styles.clearBtnText}>Clear</Text>
               </TouchableOpacity>
             </View>
@@ -664,7 +672,7 @@ export default function KobitonSDKScreen() {
             {/* iOS Build Setup */}
             <View style={[styles.card, styles.guideCard]}>
               <View style={styles.guideHeader}>
-                <Feather name="smartphone" size={16} color={Colors.primary} />
+                <Feather name="smartphone" size={16} color={Colors.primary} accessible={false} />
                 <Text style={styles.guideTitle}>iOS Setup (KobitonLAContext)</Text>
               </View>
               <Text style={styles.guideBody}>
@@ -692,7 +700,7 @@ export default function KobitonSDKScreen() {
             {/* Android Build Setup */}
             <View style={[styles.card, styles.guideCard]}>
               <View style={styles.guideHeader}>
-                <Feather name="cpu" size={16} color={Colors.accent} />
+                <Feather name="cpu" size={16} color={Colors.accent} accessible={false} />
                 <Text style={[styles.guideTitle, { color: Colors.accent }]}>Android Setup (KobitonBiometric.aar)</Text>
               </View>
               <Text style={styles.guideBody}>

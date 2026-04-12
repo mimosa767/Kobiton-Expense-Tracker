@@ -10,11 +10,17 @@ interface Props {
 }
 
 export function EmptyState({ icon = 'inbox', title, subtitle }: Props) {
+  const label = subtitle ? `${title}. ${subtitle}` : title;
   return (
-    <View style={styles.container} accessibilityRole="text" accessibilityLabel={title}>
-      <Feather name={icon} size={52} color={Colors.textMuted} />
-      <Text style={styles.title}>{title}</Text>
-      {!!subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
+    <View
+      style={styles.container}
+      accessible={true}
+      accessibilityRole="text"
+      accessibilityLabel={label}
+    >
+      <Feather name={icon} size={52} color={Colors.textMuted} accessible={false} />
+      <Text style={styles.title} accessible={false}>{title}</Text>
+      {!!subtitle && <Text style={styles.subtitle} accessible={false}>{subtitle}</Text>}
     </View>
   );
 }

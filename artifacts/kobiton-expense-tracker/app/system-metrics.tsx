@@ -484,7 +484,12 @@ export default function SystemMetricsScreen() {
         <View style={[styles.statusCard, running && { borderColor: cfg.color, borderWidth: 2 }]} testID="stress-status-card">
           <View style={styles.statusRow}>
             <View style={[styles.dot, { backgroundColor: running ? cfg.color : Colors.border }]} />
-            <Text style={[styles.statusText, { color: running ? cfg.color : Colors.textMuted }]} testID="stress-status-text">
+            <Text
+              style={[styles.statusText, { color: running ? cfg.color : Colors.textMuted }]}
+              testID="stress-status-text"
+              accessibilityLiveRegion="polite"
+              accessibilityRole="text"
+            >
               {running
                 ? allocating
                   ? `${cfg.label} stress — allocating memory…`
@@ -500,8 +505,8 @@ export default function SystemMetricsScreen() {
               </View>
               <View style={styles.loadChip}>
                 {allocating
-                  ? <ActivityIndicator size="small" color={cfg.color} style={{ marginRight: 2 }} />
-                  : <Feather name="database" size={11} color={cfg.color} />
+                  ? <ActivityIndicator size="small" color={cfg.color} style={{ marginRight: 2 }} accessibilityLabel="Allocating memory" />
+                  : <Feather name="database" size={11} color={cfg.color} accessible={false} />
                 }
                 <Text style={[styles.loadChipText, { color: cfg.color }]}>
                   {allocating ? 'allocating…' : memLabel}
