@@ -72,7 +72,8 @@
           "biometricSupport": true,
           "imageInjectionSupport": true
         }
-      ]
+      ],
+      "./plugins/withKobitonSDKWarmup"
     ],
     "experiments": {
       "typedRoutes": true,
