@@ -22,12 +22,12 @@ export default function SplashScreen() {
   }, [isLoading, session]);
 
   return (
-    <View style={styles.container}>
-      <View style={styles.logoContainer}>
+    <View style={styles.container} testID="splash-screen">
+      <View style={styles.logoContainer} testID="splash-logo-container">
         <KobitonLogo width={260} color="white" />
-        <Text style={styles.subtitle}>Expense Tracker</Text>
+        <Text style={styles.subtitle} testID="splash-subtitle">Expense Tracker</Text>
       </View>
-      <Text style={styles.tagline}>Quality-driven expense management</Text>
+      <Text style={styles.tagline} testID="splash-tagline">Quality-driven expense management</Text>
     </View>
   );
 }

@@ -173,7 +173,7 @@ export default function AudioCaptureScreen() {
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} testID="topbar-back-audio-capture">
+        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} testID="topbar-back-audio-capture" accessibilityLabel="Go back" accessibilityRole="button">
           <Feather name="arrow-left" size={22} color={Colors.white} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Audio Capture</Text>
@@ -241,6 +241,8 @@ export default function AudioCaptureScreen() {
               style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
               onPress={isRecording ? stopRecording : startRecording}
               testID={isRecording ? 'stop-recording' : 'start-recording'}
+              accessibilityLabel={isRecording ? 'Stop recording' : 'Start recording'}
+              accessibilityRole="button"
               activeOpacity={0.85}
             >
               <Feather
@@ -266,6 +268,8 @@ export default function AudioCaptureScreen() {
                     style={[styles.playBtn, playingId === rec.id && styles.playBtnActive]}
                     onPress={() => playingId === rec.id ? stopPlayback() : playRecording(rec)}
                     testID={`play-${rec.id}`}
+                    accessibilityLabel={playingId === rec.id ? 'Stop playback' : 'Play recording'}
+                    accessibilityRole="button"
                   >
                     <Feather
                       name={playingId === rec.id ? 'square' : 'play'}
@@ -284,6 +288,8 @@ export default function AudioCaptureScreen() {
                   onPress={() => deleteRecording(rec.id)}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   testID={`delete-${rec.id}`}
+                  accessibilityLabel="Delete recording"
+                  accessibilityRole="button"
                 >
                   <Feather name="trash-2" size={16} color={Colors.textMuted} />
                 </TouchableOpacity>

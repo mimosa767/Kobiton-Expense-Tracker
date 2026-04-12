@@ -453,6 +453,8 @@ export default function SystemMetricsScreen() {
           onPress={() => { stopLoad(); router.back(); }}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           testID="back-system-metrics"
+          accessibilityLabel="Go back"
+          accessibilityRole="button"
         >
           <Feather name="arrow-left" size={22} color={Colors.white} />
         </TouchableOpacity>
@@ -479,10 +481,10 @@ export default function SystemMetricsScreen() {
         </View>
 
         {/* Live status */}
-        <View style={[styles.statusCard, running && { borderColor: cfg.color, borderWidth: 2 }]}>
+        <View style={[styles.statusCard, running && { borderColor: cfg.color, borderWidth: 2 }]} testID="stress-status-card">
           <View style={styles.statusRow}>
             <View style={[styles.dot, { backgroundColor: running ? cfg.color : Colors.border }]} />
-            <Text style={[styles.statusText, { color: running ? cfg.color : Colors.textMuted }]}>
+            <Text style={[styles.statusText, { color: running ? cfg.color : Colors.textMuted }]} testID="stress-status-text">
               {running
                 ? allocating
                   ? `${cfg.label} stress — allocating memory…`
@@ -527,6 +529,9 @@ export default function SystemMetricsScreen() {
                 disabled={running}
                 activeOpacity={0.75}
                 testID={`level-${level}`}
+                accessibilityLabel={`${lc.label} stress level`}
+                accessibilityRole="button"
+                accessibilityState={{ selected, disabled: running }}
               >
                 <Text style={[
                   styles.levelName,
@@ -558,6 +563,8 @@ export default function SystemMetricsScreen() {
           onPress={running ? stopLoad : startLoad}
           activeOpacity={0.85}
           testID={running ? 'stop-stress' : 'start-stress'}
+          accessibilityLabel={running ? 'Stop stress test' : `Start ${cfg.label} stress test`}
+          accessibilityRole="button"
         >
           <Feather name={running ? 'square' : 'play'} size={18} color={Colors.white} />
           <Text style={styles.mainBtnText}>

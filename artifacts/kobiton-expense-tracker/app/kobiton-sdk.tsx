@@ -279,6 +279,8 @@ export default function KobitonSDKScreen() {
                   trackColor={{ false: Colors.border, true: Colors.accent }}
                   thumbColor={Colors.white}
                   testID="kobiton-network-capture-toggle"
+                  accessibilityLabel="Network Capture"
+                  accessibilityRole="switch"
                 />
               </View>
 
@@ -290,6 +292,8 @@ export default function KobitonSDKScreen() {
                   trackColor={{ false: Colors.border, true: Colors.accent }}
                   thumbColor={Colors.white}
                   testID="kobiton-crash-reporting-toggle"
+                  accessibilityLabel="Crash Reporting"
+                  accessibilityRole="switch"
                 />
               </View>
 

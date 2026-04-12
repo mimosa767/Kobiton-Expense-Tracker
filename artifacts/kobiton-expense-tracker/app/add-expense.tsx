@@ -240,6 +240,9 @@ function DatePickerColumn({
               onSelect(i);
               ref.current?.scrollTo({ y: i * PICKER_ITEM_H, animated: true });
             }}
+            testID={`picker-item-${item.replace(/[\s/]+/g, '-').toLowerCase()}`}
+            accessibilityLabel={item}
+            accessibilityRole="menuitem"
           >
             <Text style={{
               fontSize: 16,
@@ -312,14 +315,28 @@ function NativeDatePicker({ value, onChange }: { value: Date; onChange: (d: Date
           style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }}
           activeOpacity={1}
           onPress={() => setOpen(false)}
+          testID="date-picker-overlay"
+          accessibilityLabel="Close date picker"
         />
-        <View style={datePickerStyles.sheet}>
+        <View style={datePickerStyles.sheet} testID="date-picker-sheet">
           <View style={datePickerStyles.header}>
-            <TouchableOpacity onPress={() => setOpen(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <TouchableOpacity
+              onPress={() => setOpen(false)}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              testID="date-picker-cancel"
+              accessibilityLabel="Cancel"
+              accessibilityRole="button"
+            >
               <Text style={datePickerStyles.cancelBtn}>Cancel</Text>
             </TouchableOpacity>
             <Text style={datePickerStyles.title}>Select Date</Text>
-            <TouchableOpacity onPress={confirm} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <TouchableOpacity
+              onPress={confirm}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              testID="date-picker-done"
+              accessibilityLabel="Done"
+              accessibilityRole="button"
+            >
               <Text style={datePickerStyles.doneBtn}>Done</Text>
             </TouchableOpacity>
           </View>

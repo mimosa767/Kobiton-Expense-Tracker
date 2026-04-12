@@ -322,7 +322,7 @@ export default function MediaGalleryScreen() {
 
         <View style={styles.galleryHeader}>
           <Text style={styles.sectionTitle}>RECEIPT IMAGES & IMPORTS</Text>
-          <TouchableOpacity style={styles.importBtn} onPress={handlePickImage} testID="pick-image">
+          <TouchableOpacity style={styles.importBtn} onPress={handlePickImage} testID="pick-image" accessibilityLabel="Import image" accessibilityRole="button">
             <Feather name="plus" size={14} color={Colors.primary} />
             <Text style={styles.importBtnText}>Import</Text>
           </TouchableOpacity>
@@ -393,7 +393,7 @@ export default function MediaGalleryScreen() {
           <Text style={styles.permSubtitle}>
             Allow camera access so the QR scanner can read codes — including ones injected by Kobiton.
           </Text>
-          <TouchableOpacity style={styles.permBtn} onPress={requestPermission} testID="grant-camera-btn">
+          <TouchableOpacity style={styles.permBtn} onPress={requestPermission} testID="grant-camera-btn" accessibilityLabel="Grant camera access" accessibilityRole="button">
             <Text style={styles.permBtnText}>Grant Camera Access</Text>
           </TouchableOpacity>
         </View>
@@ -460,6 +460,8 @@ export default function MediaGalleryScreen() {
                 onPress={captureAndDecode}
                 disabled={isCapturing || (Platform.OS === 'android' && !cameraVisible)}
                 testID="capture-decode-btn"
+                accessibilityLabel={isCapturing ? 'Decoding' : 'Capture and Decode'}
+                accessibilityRole="button"
               >
                 {isCapturing ? (
                   <ActivityIndicator size="small" color={Colors.white} />
@@ -476,7 +478,7 @@ export default function MediaGalleryScreen() {
           <ScrollView
             contentContainerStyle={[styles.resultContent, { paddingBottom: insets.bottom + 24 }]}
           >
-            <View style={styles.resultCard}>
+            <View style={styles.resultCard} testID="qr-result-card">
               <View style={styles.resultIconRow}>
                 <View style={styles.resultIconBg}>
                   <Feather name="check-circle" size={28} color={Colors.success} />
@@ -484,21 +486,29 @@ export default function MediaGalleryScreen() {
               </View>
               <Text style={styles.resultTitle}>Scanned Successfully</Text>
               <Text style={styles.resultTypeLabel}>TYPE</Text>
-              <Text style={styles.resultType}>{scannedResult?.type?.toUpperCase() ?? '—'}</Text>
+              <Text style={styles.resultType} testID="qr-result-type">{scannedResult?.type?.toUpperCase() ?? '—'}</Text>
               <Text style={styles.resultDataLabel}>DATA</Text>
               <View style={styles.resultDataBox}>
-                <Text style={styles.resultData} selectable>{scannedResult?.data ?? ''}</Text>
+                <Text style={styles.resultData} selectable testID="qr-result-data">{scannedResult?.data ?? ''}</Text>
               </View>
               <View style={styles.resultActions}>
                 <TouchableOpacity
                   style={[styles.copyBtn, copyConfirmed && styles.copyBtnConfirmed]}
                   onPress={handleCopy}
                   testID="copy-result-btn"
+                  accessibilityLabel={copyConfirmed ? 'Copied' : 'Copy result'}
+                  accessibilityRole="button"
                 >
                   <Feather name={copyConfirmed ? 'check' : 'copy'} size={15} color={Colors.white} />
                   <Text style={styles.copyBtnText}>{copyConfirmed ? 'Copied!' : 'Copy'}</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.rescanBtn} onPress={handleRescan} testID="rescan-btn">
+                <TouchableOpacity
+                  style={styles.rescanBtn}
+                  onPress={handleRescan}
+                  testID="rescan-btn"
+                  accessibilityLabel="Scan again"
+                  accessibilityRole="button"
+                >
                   <Feather name="refresh-cw" size={15} color={Colors.white} />
                   <Text style={styles.rescanBtnText}>Scan Again</Text>
                 </TouchableOpacity>
@@ -525,7 +535,7 @@ export default function MediaGalleryScreen() {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} testID="topbar-back-media-gallery">
+        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} testID="topbar-back-media-gallery" accessibilityLabel="Go back" accessibilityRole="button">
           <Feather name="arrow-left" size={22} color={Colors.white} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Media Gallery</Text>
@@ -540,6 +550,9 @@ export default function MediaGalleryScreen() {
             style={[styles.tabBtn, tab === t && styles.tabBtnActive]}
             onPress={() => setTab(t)}
             testID={`tab-${t}`}
+            accessibilityLabel={t === 'gallery' ? 'Gallery tab' : 'QR Scanner tab'}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: tab === t }}
           >
             <Feather
               name={t === 'gallery' ? 'image' : 'maximize'}

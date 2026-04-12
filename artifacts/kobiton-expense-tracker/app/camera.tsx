@@ -33,6 +33,9 @@ function WebFallback() {
       <TouchableOpacity
         style={styles.fallbackBtn}
         onPress={() => { clearCameraCallback(); router.back(); }}
+        testID="camera-web-go-back"
+        accessibilityLabel="Go Back"
+        accessibilityRole="button"
       >
         <Text style={styles.fallbackBtnText}>Go Back</Text>
       </TouchableOpacity>
@@ -148,12 +151,15 @@ function AndroidKobitonCamera() {
 
   if (error) {
     return (
-      <View style={styles.permissionContainer}>
+      <View style={styles.permissionContainer} testID="camera-error-state">
         <Feather name="alert-triangle" size={40} color={Colors.error} />
-        <Text style={[styles.permissionText, { color: Colors.error }]}>{error}</Text>
+        <Text style={[styles.permissionText, { color: Colors.error }]} testID="camera-error-text">{error}</Text>
         <TouchableOpacity
           style={[styles.permissionBtn, styles.cancelBtn]}
           onPress={handleCancel}
+          testID="camera-error-go-back"
+          accessibilityLabel="Go Back"
+          accessibilityRole="button"
         >
           <Text style={styles.permissionBtnText}>Go Back</Text>
         </TouchableOpacity>
@@ -163,7 +169,7 @@ function AndroidKobitonCamera() {
 
   if (!permission) {
     return (
-      <View style={styles.permissionContainer}>
+      <View style={styles.permissionContainer} testID="camera-checking-permission">
         <ActivityIndicator color={Colors.white} size="large" />
         <Text style={styles.permissionText}>Checking camera access…</Text>
       </View>
@@ -172,13 +178,19 @@ function AndroidKobitonCamera() {
 
   if (!permission.granted) {
     return (
-      <View style={styles.permissionContainer}>
+      <View style={styles.permissionContainer} testID="camera-permission-denied">
         <Feather name="camera-off" size={44} color={Colors.white} />
         <Text style={styles.permissionText}>
           Camera access is required to capture receipt photos.
         </Text>
         {permission.canAskAgain ? (
-          <TouchableOpacity style={styles.permissionBtn} onPress={requestPermission}>
+          <TouchableOpacity
+            style={styles.permissionBtn}
+            onPress={requestPermission}
+            testID="camera-allow-access"
+            accessibilityLabel="Allow Camera Access"
+            accessibilityRole="button"
+          >
             <Text style={styles.permissionBtnText}>Allow Camera Access</Text>
           </TouchableOpacity>
         ) : (
@@ -189,6 +201,9 @@ function AndroidKobitonCamera() {
         <TouchableOpacity
           style={[styles.permissionBtn, styles.cancelBtn]}
           onPress={handleCancel}
+          testID="camera-permission-cancel"
+          accessibilityLabel="Cancel"
+          accessibilityRole="button"
         >
           <Text style={styles.permissionBtnText}>Cancel</Text>
         </TouchableOpacity>
@@ -197,7 +212,7 @@ function AndroidKobitonCamera() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID="camera-active">
       {cameraVisible ? (
         <CameraView style={StyleSheet.absoluteFill} facing="back" />
       ) : (
@@ -210,7 +225,13 @@ function AndroidKobitonCamera() {
       )}
 
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity onPress={handleCancel} style={styles.iconBtn} accessibilityLabel="Cancel">
+        <TouchableOpacity
+          onPress={handleCancel}
+          style={styles.iconBtn}
+          accessibilityLabel="Cancel"
+          accessibilityRole="button"
+          testID="camera-cancel-btn"
+        >
           <Feather name="x" size={26} color={Colors.white} />
         </TouchableOpacity>
         <Text style={styles.topBarTitle}>Take Receipt Photo</Text>
@@ -298,7 +319,7 @@ function IosCameraScreen() {
 
   if (!permission) {
     return (
-      <View style={styles.permissionContainer}>
+      <View style={styles.permissionContainer} testID="camera-checking-permission">
         <ActivityIndicator color={Colors.white} size="large" />
         <Text style={styles.permissionText}>Checking camera access…</Text>
       </View>
@@ -307,13 +328,19 @@ function IosCameraScreen() {
 
   if (!permission.granted) {
     return (
-      <View style={styles.permissionContainer}>
+      <View style={styles.permissionContainer} testID="camera-permission-denied">
         <Feather name="camera-off" size={44} color={Colors.white} />
         <Text style={styles.permissionText}>
           Camera access is required to capture receipt photos.
         </Text>
         {permission.canAskAgain ? (
-          <TouchableOpacity style={styles.permissionBtn} onPress={requestPermission}>
+          <TouchableOpacity
+            style={styles.permissionBtn}
+            onPress={requestPermission}
+            testID="camera-allow-access"
+            accessibilityLabel="Allow Camera Access"
+            accessibilityRole="button"
+          >
             <Text style={styles.permissionBtnText}>Allow Camera Access</Text>
           </TouchableOpacity>
         ) : (
@@ -324,6 +351,9 @@ function IosCameraScreen() {
         <TouchableOpacity
           style={[styles.permissionBtn, styles.cancelBtn]}
           onPress={handleCancel}
+          testID="camera-permission-cancel"
+          accessibilityLabel="Cancel"
+          accessibilityRole="button"
         >
           <Text style={styles.permissionBtnText}>Cancel</Text>
         </TouchableOpacity>
@@ -332,7 +362,7 @@ function IosCameraScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID="camera-active">
       <CameraView
         ref={cameraRef}
         style={StyleSheet.absoluteFill}
@@ -340,11 +370,23 @@ function IosCameraScreen() {
       />
 
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity onPress={handleCancel} style={styles.iconBtn} accessibilityLabel="Cancel">
+        <TouchableOpacity
+          onPress={handleCancel}
+          style={styles.iconBtn}
+          accessibilityLabel="Cancel"
+          accessibilityRole="button"
+          testID="camera-cancel-btn"
+        >
           <Feather name="x" size={26} color={Colors.white} />
         </TouchableOpacity>
         <Text style={styles.topBarTitle}>Take Receipt Photo</Text>
-        <TouchableOpacity onPress={toggleFacing} style={styles.iconBtn} accessibilityLabel="Flip camera">
+        <TouchableOpacity
+          onPress={toggleFacing}
+          style={styles.iconBtn}
+          accessibilityLabel="Flip camera"
+          accessibilityRole="button"
+          testID="camera-flip-btn"
+        >
           <Feather name="refresh-cw" size={22} color={Colors.white} />
         </TouchableOpacity>
       </View>

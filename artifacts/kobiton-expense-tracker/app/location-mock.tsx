@@ -198,6 +198,8 @@ export default function LocationMockScreen() {
           onPress={() => router.back()}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           testID="location-back"
+          accessibilityLabel="Go back"
+          accessibilityRole="button"
         >
           <Feather name="arrow-left" size={22} color={Colors.white} />
         </TouchableOpacity>
@@ -207,6 +209,8 @@ export default function LocationMockScreen() {
           disabled={isRefreshDisabled}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           testID="refresh-location"
+          accessibilityLabel="Refresh location"
+          accessibilityRole="button"
         >
           <Feather name="refresh-cw" size={20} color={isRefreshDisabled ? 'rgba(255,255,255,0.4)' : Colors.white} />
         </TouchableOpacity>
@@ -218,7 +222,7 @@ export default function LocationMockScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Status indicator card */}
-        <View style={styles.card}>
+        <View style={styles.card} testID="location-status-card">
           <View style={styles.statusRow}>
             <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
               <MaterialCommunityIcons
@@ -236,7 +240,7 @@ export default function LocationMockScreen() {
               />
             </Animated.View>
             <View style={styles.statusTextCol}>
-              <Text style={styles.statusLabel}>
+              <Text style={styles.statusLabel} testID="location-status-text">
                 {status === 'idle' ? 'Ready' :
                  status === 'requesting' ? 'Requesting permission…' :
                  status === 'acquiring' ? 'Acquiring GPS signal…' :
@@ -267,6 +271,8 @@ export default function LocationMockScreen() {
             style={styles.settingsBtn}
             onPress={() => Linking.openSettings()}
             testID="open-settings-btn"
+            accessibilityLabel="Open Settings"
+            accessibilityRole="button"
           >
             <Feather name="settings" size={15} color={Colors.white} />
             <Text style={styles.settingsBtnText}>Open Settings</Text>
@@ -276,18 +282,18 @@ export default function LocationMockScreen() {
         {status === 'received' && location ? (
           <>
             <Text style={styles.sectionTitle}>RECEIVED COORDINATES</Text>
-            <View style={styles.card}>
+            <View style={styles.card} testID="location-coords-card">
               <View style={styles.coordGrid}>
                 <View style={styles.coordCell}>
                   <Text style={styles.coordLabel}>LATITUDE</Text>
-                  <Text style={styles.coordValue}>{fmtCoord(location.latitude, 'N', 'S')}</Text>
-                  <Text style={styles.coordRaw}>{location.latitude.toFixed(6)}</Text>
+                  <Text style={styles.coordValue} testID="location-latitude-value">{fmtCoord(location.latitude, 'N', 'S')}</Text>
+                  <Text style={styles.coordRaw} testID="location-latitude-raw">{location.latitude.toFixed(6)}</Text>
                 </View>
                 <View style={styles.coordDivider} />
                 <View style={styles.coordCell}>
                   <Text style={styles.coordLabel}>LONGITUDE</Text>
-                  <Text style={styles.coordValue}>{fmtCoord(location.longitude, 'E', 'W')}</Text>
-                  <Text style={styles.coordRaw}>{location.longitude.toFixed(6)}</Text>
+                  <Text style={styles.coordValue} testID="location-longitude-value">{fmtCoord(location.longitude, 'E', 'W')}</Text>
+                  <Text style={styles.coordRaw} testID="location-longitude-raw">{location.longitude.toFixed(6)}</Text>
                 </View>
               </View>
 
@@ -320,6 +326,8 @@ export default function LocationMockScreen() {
               style={styles.refreshBtn}
               onPress={() => setRefreshCount((c) => c + 1)}
               testID="refresh-location-btn"
+              accessibilityLabel="Refresh Location"
+              accessibilityRole="button"
             >
               <Feather name="refresh-cw" size={16} color={Colors.white} />
               <Text style={styles.refreshBtnText}>Refresh Location</Text>
