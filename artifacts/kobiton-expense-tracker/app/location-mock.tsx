@@ -74,18 +74,23 @@ export default function LocationMockScreen() {
   }, [pulseAnim, nativeDriver]);
 
   useEffect(() => {
-    // ── WHY watchPositionAsync instead of getCurrentPositionAsync ──────────────
+    // ── Two-phase location strategy ────────────────────────────────────────────
     //
-    // getCurrentPositionAsync may return a CACHED GPS fix from before the
-    // Kobiton location injection was active.  On both iOS and Android, the OS
-    // location subsystem caches the last known fix; if the cache is fresher
-    // than the requested accuracy window, it is returned immediately — even
-    // when Kobiton has already pushed different coordinates.
+    // Phase 1 — getCurrentPositionAsync (Change 1):
+    //   Forces FusedLocationProvider / CoreLocation to ask the GPS hardware for
+    //   a fresh fix instead of returning the OS's last-known-location cache.
+    //   Without this, a previous Kobiton session's mock value (e.g. Rome) stays
+    //   in the cache and is returned immediately on subscribe, making the screen
+    //   show the wrong city until the watcher eventually delivers a new fix.
+    //   The timestamp check (fresh.timestamp >= screenMountedAt - 500) rejects
+    //   the case where getCurrentPositionAsync itself returns a cached fix.
     //
-    // watchPositionAsync subscribes to the OS location stream, so every time
-    // Kobiton injects a new coordinate pair the listener fires immediately and
-    // the UI updates in real time — without requiring the user to tap Refresh.
-    // The subscription is torn down on unmount or when refreshCount changes.
+    // Phase 2 — watchPositionAsync (Change 2 + existing):
+    //   Subscribes to the live OS location stream so subsequent Kobiton
+    //   injections update the UI in real time.  The same time-gate guards
+    //   (isInCacheWindow, isStaleFix) prevent the watcher's initial cached
+    //   callback from overwriting the fresh fix delivered by Phase 1.
+    //   The subscription is torn down on unmount or when refreshCount changes.
 
     let subscription: Location.LocationSubscription | null = null;
     let cancelled = false;
@@ -141,6 +146,38 @@ export default function LocationMockScreen() {
         if (cancelled) return;
         setStatus('acquiring');
 
+        const screenMountedAt = Date.now();
+
+        // Force a fresh GPS read to bypass the OS's last-known-location cache.
+        // Without this, the screen displays whatever the previous Kobiton session
+        // injected (e.g. Rome) instead of the device's actual location (e.g. Atlanta).
+        // getCurrentPositionAsync with BestForNavigation accuracy forces FusedLocationProvider
+        // to query the GPS hardware rather than returning the cached fix.
+        try {
+          const fresh = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.BestForNavigation,
+          });
+          if (!cancelled && fresh.timestamp >= screenMountedAt - 500) {
+            const { city, country } = await reverseGeocode(fresh.coords.latitude, fresh.coords.longitude);
+            if (!cancelled) {
+              setLocation({
+                latitude: fresh.coords.latitude,
+                longitude: fresh.coords.longitude,
+                accuracy: fresh.coords.accuracy ?? null,
+                altitude: fresh.coords.altitude ?? null,
+                city,
+                country,
+                receivedAt: new Date().toISOString(),
+              });
+              setStatus('received');
+              stopPulse();
+            }
+          }
+        } catch (e) {
+          // Fall through to watchPositionAsync — it'll deliver a fix eventually
+          console.warn('[location-mock] getCurrentPositionAsync failed, relying on watcher:', e);
+        }
+
         // Watch for real-time location updates.
         //
         // WHY timeInterval: 2000 instead of 0:
@@ -157,6 +194,13 @@ export default function LocationMockScreen() {
           { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 2000, distanceInterval: 0 },
           async (pos) => {
             if (cancelled) return;
+
+            // Reject the OS's cached last-known location delivered immediately on subscribe.
+            // See Phase 1 comment above for why.
+            const isInCacheWindow = Date.now() - screenMountedAt < 2000;
+            const isStaleFix = pos.timestamp < screenMountedAt - 500;
+            if (isInCacheWindow || isStaleFix) return;
+
             const { city, country } = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
             if (cancelled) return;
             setLocation({
