@@ -3183,39 +3183,102 @@ function withKobitonIosCaptureNativeModule(config) {
 extern void RCTRegisterModule(Class);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// KobitonCaptureModule
+// KobitonCaptureModule — singleton AVCaptureSession design
 //
-// iOS equivalent of the Android KobitonCameraModule / KobitonCameraActivity.
-// Creates its own AVCaptureSession + AVCaptureVideoDataOutput, which the
-// Kobiton SDK swizzles (same as it swizzles the CameraView's output), then
-// captures a single sample buffer and returns it as JPEG base64.
+// CRASH HISTORY AND ROOT CAUSE (crash log 8550509, Apr 11 2026):
 //
-// JS usage:
-//   const b64 = await NativeModules.KobitonCaptureModule.captureFrame(1500);
+//   Exception: EXC_CRASH / SIGABRT on thread "captureSessionQueue"
+//   Faulting backtrace:
+//     hook_AVCaptureConnection_setVideoOrientation   ← KobitonSdk.framework
+//     -[AVCaptureVideoPreviewLayer setSimulatedImage:]
+//     -[AVCaptureVideoPreviewLayer createSimulatedImage]
+//     -[UIImage(Extensions) modifyToSize:withOrientationCorrection:withScale:]
+//     _UIGraphicsBeginImageContextWithOptions
+//     -[NSMutableDictionary initWithContentsOfFile:]   ← throws ObjC exception
+//     objc_exception_throw → abort()
+//
+//   What happens: every time a NEW AVCaptureSession calls addInput:, Kobiton's
+//   hook_AVCaptureConnection_setVideoOrientation swizzle fires.  After the first
+//   image injection, Kobiton caches the injected frame internally.  On the
+//   SECOND addInput: call (second camera feature = QR scanner), Kobiton tries
+//   to re-paint that cached image onto the new preview layer via
+//   setSimulatedImage:/createSimulatedImage.  Inside that path it reads a plist
+//   via NSDictionary initWithContentsOfFile: against a file that no longer
+//   exists (cleaned up after the first session), which throws an uncaught
+//   ObjC exception on captureSessionQueue → SIGABRT.
+//
+//   This is a bug inside KobitonSdk.framework (Kobiton support ticket needed).
+//   The workaround implemented here: keep ONE shared AVCaptureSession alive for
+//   the entire app lifetime.  addInput: (and therefore the swizzle) fires
+//   exactly ONCE.  The second and subsequent captureFrame: calls add/remove
+//   only an AVCaptureVideoDataOutput — no new session, no new addInput: call,
+//   no second swizzle invocation, no crash.
+//
+// JS usage (unchanged from caller's perspective):
+//   const b64 = await NativeModules.KobitonCaptureModule.captureFrame(2500);
 //   // b64 is a raw base64 JPEG string (no data-URI prefix)
 //
-// Flow:
-//   1. JS unmounts CameraView so expo-camera releases the AVCaptureSession.
-//   2. JS calls captureFrame(delayMs) — this opens a new session.
-//   3. After delayMs ms, the module arms itself to capture the next frame.
-//   4. The captured buffer (Kobiton-injected) is returned as JPEG base64.
-//   5. JS re-mounts CameraView.
+// Flow (updated):
+//   1. JS does NOT mount a CameraView on iOS (removed from media-gallery.tsx).
+//      No CameraView = no competing AVCaptureSession = no trigger for the crash.
+//   2. JS calls captureFrame(delayMs).
+//   3. Module attaches an AVCaptureVideoDataOutput to the shared session.
+//   4. After delayMs ms, arms the output to capture the next Kobiton-injected frame.
+//   5. On capture: JPEG base64 returned, output removed from session.
+//      Session stays running for the next captureFrame: call.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── Singleton shared session — addInput: fires exactly once per app lifetime ──
+static AVCaptureSession *_sharedAVSession = nil;
+static dispatch_once_t   _sharedAVOnce;
+
 @interface KobitonCaptureModule : NSObject <RCTBridgeModule, AVCaptureVideoDataOutputSampleBufferDelegate>
++ (AVCaptureSession *)sharedSession;
 @end
 
 @implementation KobitonCaptureModule {
-    AVCaptureSession             *_session;
-    AVCaptureVideoDataOutput     *_output;
-    RCTPromiseResolveBlock        _resolve;
-    RCTPromiseRejectBlock         _reject;
-    BOOL                          _armed;    // YES = capture the next arriving frame
-    BOOL                          _settled;  // YES = promise already resolved/rejected
-    dispatch_queue_t              _captureQueue;
+    // Per-capture transient state (reset on every captureFrame: call)
+    AVCaptureVideoDataOutput *_output;        // attached for the duration of one capture
+    RCTPromiseResolveBlock    _resolve;
+    RCTPromiseRejectBlock     _reject;
+    BOOL                      _armed;         // YES = capture the next arriving frame
+    BOOL                      _settled;       // YES = promise already resolved/rejected
+    dispatch_queue_t          _captureQueue;
     // ── Native memory stress ivars ────────────────────────────────────────────
-    void                         *_memBuffer;
-    size_t                        _memBytes;
-    NSTimer                      *_memThrashTimer;
+    void                     *_memBuffer;
+    size_t                    _memBytes;
+    NSTimer                  *_memThrashTimer;
+}
+
+// ─── Singleton session setup ──────────────────────────────────────────────────
+//
+// Called once — on first captureFrame: or on explicit warmUp from JS.
+// All subsequent captureFrame: calls re-use the same AVCaptureSession so
+// addInput: never fires a second time and Kobiton's swizzle path is safe.
++ (AVCaptureSession *)sharedSession {
+    dispatch_once(&_sharedAVOnce, ^{
+        AVCaptureDevice *device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+        if (!device) {
+            NSLog(@"[KOBITON] KobitonCaptureModule: sharedSession — no back camera device");
+            return;
+        }
+        NSError *err = nil;
+        AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:device error:&err];
+        if (!input) {
+            NSLog(@"[KOBITON] KobitonCaptureModule: sharedSession — cannot create input: %@",
+                  err.localizedDescription);
+            return;
+        }
+        _sharedAVSession = [[AVCaptureSession alloc] init];
+        _sharedAVSession.sessionPreset = AVCaptureSessionPresetMedium;
+        // addInput: triggers KobitonSdk's hook_AVCaptureConnection_setVideoOrientation swizzle.
+        // This is the ONLY time that swizzle fires for the life of the app.
+        [_sharedAVSession addInput:input];
+        [_sharedAVSession startRunning];
+        NSLog(@"[KOBITON] KobitonCaptureModule: shared AVCaptureSession created and running "
+              @"— addInput: fired once, Kobiton swizzle installed");
+    });
+    return _sharedAVSession;
 }
 
 + (NSString *)moduleName { return @"KobitonCaptureModule"; }
@@ -3225,34 +3288,49 @@ extern void RCTRegisterModule(Class);
     NSLog(@"[KOBITON] KobitonCaptureModule loaded");
 }
 
-// captureFrame:resolve:reject
+// ─── warmUpSession:resolve:reject ─────────────────────────────────────────────
 //
-//   delayMs — milliseconds to wait after session start before arming the
-//             capture. The Kobiton SDK needs a moment to start injecting
-//             frames into the AVCaptureVideoDataOutput delegate. A minimum
-//             of 2500ms is enforced (see below).
+// Optional: JS can call this on screen mount to pre-create the shared session
+// so the first captureFrame: doesn't pay session-startup latency.
+// Safe to call multiple times — dispatch_once guarantees single execution.
+RCT_EXPORT_METHOD(warmUpSession:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+    AVCaptureSession *session = [[self class] sharedSession];
+    resolve(@(session != nil));
+}
+
+// ─── captureFrame:resolve:reject ──────────────────────────────────────────────
 //
-//   An additional 4-second timeout fires if no frame arrives after arming.
+//   delayMs — milliseconds to wait after attaching the output before arming.
+//             Gives Kobiton time to start injecting into the new output.
+//             A minimum of 2500ms is enforced (see note below).
+//
+//   No new AVCaptureSession is created. The shared singleton session is reused.
+//   Only an AVCaptureVideoDataOutput is added and later removed per capture.
 RCT_EXPORT_METHOD(captureFrame:(double)delayMs
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 {
     // ── Minimum arm delay ─────────────────────────────────────────────────────
-    // Root cause confirmed from device log (Apr 10 09:08:22, session 8548140-ios):
-    // When a prior AVCaptureSession (receipt camera) did not tear down cleanly
-    // (logged: "CoreAnimation: deleted thread with uncommitted CATransaction" at
-    // 09:08:05), the subsequent AVCaptureSession needs extra time to negotiate
-    // its output format and deliver valid (non-zero-dimension) sample buffers.
-    // At 1500ms the arm fired before valid buffers arrived; the zero-size buffer
-    // caused the NSInternalInconsistencyException crash in UIGraphics.m:410.
-    // The zero-size guard in captureOutput:didOutputSampleBuffer: also covers
-    // this, but a longer arm delay is defence-in-depth — on most devices the
-    // injected frame is actually available earlier, so the extra 1s is harmless.
+    // Root cause confirmed (Apr 10 09:08:22, session 8548140-ios):
+    // Even with the shared session, Kobiton needs time after the output is added
+    // to start routing injected frames to the new delegate.  2500 ms is the
+    // empirically confirmed minimum; below this the arm fires before injected
+    // frames arrive and the timeout is hit.
     double effectiveDelay = MAX(delayMs, 2500.0);
 
-    // Guard: don't start a second capture while one is already in progress.
-    if (_session && _session.isRunning) {
+    // ── Guard: busy check ─────────────────────────────────────────────────────
+    // _output != nil means a captureFrame: is already in progress.
+    if (_output) {
         reject(@"E_BUSY", @"A capture is already in progress — wait for it to finish", nil);
+        return;
+    }
+
+    // ── Get the shared session ────────────────────────────────────────────────
+    AVCaptureSession *session = [[self class] sharedSession];
+    if (!session) {
+        reject(@"E_NO_CAMERA", @"Shared camera session could not be created (no back camera?)", nil);
         return;
     }
 
@@ -3263,40 +3341,30 @@ RCT_EXPORT_METHOD(captureFrame:(double)delayMs
 
     _captureQueue = dispatch_queue_create("com.kobiton.capture", DISPATCH_QUEUE_SERIAL);
 
-    // Open the back camera
-    AVCaptureDevice *device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
-    if (!device) {
-        reject(@"E_NO_CAMERA", @"No back camera device found", nil);
-        return;
-    }
-
-    NSError *err = nil;
-    AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:device error:&err];
-    if (!input) {
-        reject(@"E_CAMERA_INPUT", err.localizedDescription ?: @"Cannot create AVCaptureDeviceInput", nil);
-        return;
-    }
-
-    _session = [[AVCaptureSession alloc] init];
-    _session.sessionPreset = AVCaptureSessionPresetMedium;
-    [_session addInput:input];
-
-    // AVCaptureVideoDataOutput — this is what Kobiton swizzles to inject frames
+    // Attach a new AVCaptureVideoDataOutput to the shared session.
+    // Kobiton already swizzled the session's connection when addInput: fired
+    // (during sharedSession creation).  Adding a new output does NOT re-invoke
+    // hook_AVCaptureConnection_setVideoOrientation → setSimulatedImage: crash
+    // path because the swizzle is on the session-level connection, not per-output.
     _output = [[AVCaptureVideoDataOutput alloc] init];
     _output.videoSettings = @{
         (NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)
     };
     _output.alwaysDiscardsLateVideoFrames = YES;
     [_output setSampleBufferDelegate:self queue:_captureQueue];
-    [_session addOutput:_output];
 
-    [_session startRunning];
-    NSLog(@"[KOBITON] KobitonCaptureModule: session started — arming in %.0f ms (requested %.0f ms)", effectiveDelay, delayMs);
+    [session addOutput:_output];
 
-    // Arm after effectiveDelay: by this point Kobiton should be injecting into _output.
-    // Must capture weakSelf into a strong local before accessing ivars —
-    // clang forbids dereferencing a __weak pointer directly (race condition).
+    if (!session.isRunning) {
+        [session startRunning];
+    }
+
+    NSLog(@"[KOBITON] KobitonCaptureModule: output added to shared session — "
+          @"arming in %.0f ms (requested %.0f ms)", effectiveDelay, delayMs);
+
     __weak KobitonCaptureModule *weakSelf = self;
+
+    // Arm after effectiveDelay
     dispatch_after(
         dispatch_time(DISPATCH_TIME_NOW, (int64_t)(effectiveDelay * NSEC_PER_MSEC)),
         dispatch_get_main_queue(),
@@ -3318,12 +3386,13 @@ RCT_EXPORT_METHOD(captureFrame:(double)delayMs
             if (!s || s->_settled) return;
             NSLog(@"[KOBITON] KobitonCaptureModule: timeout — no injected frame received");
             [s finishWithError:@"E_TIMEOUT"
-                       message:@"No injected frame received within timeout. Ensure the Kobiton image injection is active and try again."];
+                       message:@"No injected frame received within timeout. "
+                               @"Ensure the Kobiton image injection is active and try again."];
         }
     );
 }
 
-// AVCaptureVideoDataOutputSampleBufferDelegate
+// ─── AVCaptureVideoDataOutputSampleBufferDelegate ────────────────────────────
 - (void)captureOutput:(AVCaptureOutput *)output
 didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
        fromConnection:(AVCaptureConnection *)connection
@@ -3337,36 +3406,25 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     size_t height = CVPixelBufferGetHeight(imageBuffer);
 
     // ── Zero-size guard ───────────────────────────────────────────────────────
-    // Root cause confirmed from device log (Apr 10 09:08:22, session 8548140-ios):
-    //   *** Assertion failure in UIGraphics.m:410
-    //   *** NSInternalInconsistencyException: UIGraphicsBeginImageContext() failed
-    //       to allocate CGBitmapContext: size={0, 0}, scale=3.000000
+    // Root cause confirmed (Apr 10 09:08:22, session 8548140-ios):
+    // After an unclean session teardown (CATransaction warning), the next
+    // AVCaptureSession immediately delivers zero-size frames during output format
+    // negotiation.  Disarming on that zero-size buffer causes a downstream crash
+    // in UIGraphicsBeginImageContext({0,0}).
     //
-    // Pattern: it is always the SECOND camera feature that crashes, regardless
-    // of order. The first session's unclean teardown (evidenced by the
-    // CoreAnimation: deleted thread with uncommitted CATransaction warning)
-    // leaves AVFoundation in a state where the next AVCaptureSession immediately
-    // delivers a zero-size frame during output format negotiation.
-    //
-    // Disarming (_settled=YES) on that first zero-size buffer causes the crash
-    // inside CGBitmapContextCreate(width=0,height=0) → NULL context →
-    // CGBitmapContextCreateImage → UIImage → UIImageJPEGRepresentation →
-    // internal UIGraphicsBeginImageContext({0,0}) → fatal assertion.
-    //
-    // Fix: skip zero-size buffers WITHOUT disarming. _armed stays YES so the
-    // next arriving buffer (which will have valid dimensions) is processed
-    // instead. The crash path is unreachable once this guard is in place.
+    // Fix: skip zero-size buffers WITHOUT disarming.  _armed stays YES so the
+    // next valid-dimension frame is processed instead.
     if (width == 0 || height == 0) {
-        NSLog(@"[KOBITON] KobitonCaptureModule: skipping zero-size buffer (session still negotiating format)");
+        NSLog(@"[KOBITON] KobitonCaptureModule: skipping zero-size buffer (format negotiation)");
         return;
     }
 
-    // Disarm immediately so we capture exactly one valid frame
+    // Disarm immediately — capture exactly one valid frame
     _armed   = NO;
     _settled = YES;
-    NSLog(@"[KOBITON] KobitonCaptureModule: frame captured (%zux%zu) — converting to JPEG", width, height);
+    NSLog(@"[KOBITON] KobitonCaptureModule: frame captured (%zux%zu) — converting to JPEG",
+          width, height);
 
-    // kCVPixelBufferLock_ReadOnly is the correct constant (not kCVPixelBufferLockFlags_ReadOnly)
     CVPixelBufferLockBaseAddress(imageBuffer, kCVPixelBufferLock_ReadOnly);
 
     size_t bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer);
@@ -3390,9 +3448,13 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     NSData   *jpeg   = UIImageJPEGRepresentation(raw, 0.9);
     NSString *base64 = [jpeg base64EncodedStringWithOptions:0];
 
-    [_session stopRunning];
-    _session = nil;
-    _output  = nil;
+    // Detach the output — session stays running for the next captureFrame: call.
+    // This does NOT trigger hook_AVCaptureConnection_setVideoOrientation because
+    // removeOutput: does not create a new session or new connection.
+    if (_sharedAVSession && _output) {
+        [_sharedAVSession removeOutput:_output];
+    }
+    _output = nil;
 
     if (base64.length == 0) {
         [self finishWithError:@"E_ENCODE" message:@"JPEG encoding returned empty data"];
@@ -3410,13 +3472,18 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     });
 }
 
+// ─── finishWithError:message: ─────────────────────────────────────────────────
+//
+// Detaches the output from the shared session and rejects the JS promise.
+// Does NOT stop the shared session (it stays running for the next capture).
 - (void)finishWithError:(NSString *)code message:(NSString *)msg
 {
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self->_session stopRunning];
-        self->_session  = nil;
-        self->_output   = nil;
-        self->_settled  = YES;
+        if (_sharedAVSession && self->_output) {
+            [_sharedAVSession removeOutput:self->_output];
+        }
+        self->_output  = nil;
+        self->_settled = YES;
         if (self->_reject) {
             self->_reject(code, msg, nil);
             self->_resolve = nil;
@@ -3453,7 +3520,6 @@ RCT_EXPORT_METHOD(allocateNativeMemory:(double)megabytes
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 {
-    // Release any previous allocation before starting a new one.
     [self releaseNativeMemoryInternal];
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
@@ -3463,8 +3529,6 @@ RCT_EXPORT_METHOD(allocateNativeMemory:(double)megabytes
             resolve(@(0));
             return;
         }
-        // Touch one byte per 4 KB page to commit all physical pages immediately.
-        // XOR with 0xA5 produces a non-compressible pattern that prevents zRAM.
         uint8_t *p = (uint8_t *)buffer;
         for (size_t i = 0; i < bytes; i += 4096) {
             p[i] = (uint8_t)(i ^ 0xA5);
@@ -3472,7 +3536,6 @@ RCT_EXPORT_METHOD(allocateNativeMemory:(double)megabytes
         self->_memBuffer = buffer;
         self->_memBytes  = bytes;
 
-        // Start the thrash timer on the main run loop so NSTimer fires reliably.
         dispatch_async(dispatch_get_main_queue(), ^{
             [self startMemoryThrash];
             NSLog(@"[KOBITON] KobitonCaptureModule: allocated %.0f MB native (malloc) — thrash timer started", megabytes);
@@ -3501,11 +3564,6 @@ RCT_EXPORT_METHOD(releaseNativeMemory:(RCTPromiseResolveBlock)resolve
 
 - (void)startMemoryThrash {
     [_memThrashTimer invalidate];
-    // Touch one byte per 4 KB page every 100 ms.
-    // Work per tick: (bytes / 4096) byte reads+writes.
-    // For 300 MB: (300×1024×1024 / 4096) = 76,800 writes ≈ 76 µs — negligible.
-    // This keeps every page resident in phys_footprint and prevents jetsam
-    // from compressing them out of Kobiton's System Metrics reading.
     __weak KobitonCaptureModule *weakSelf = self;
     _memThrashTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
                                                       repeats:YES

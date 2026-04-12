@@ -50,31 +50,29 @@ export default function MediaGalleryScreen() {
   }, [tab]);
 
   useEffect(() => {
-    // ── WHY [permission?.granted, tab] and not just [permission?.granted] ──────
+    // ── iOS: no CameraView — singleton AVCaptureSession handles all captures ────
     //
-    // BUG (old behaviour):
-    //   permission.granted is already true on a Kobiton session (pre-granted).
-    //   The effect fired once on app load, the 1 500 ms timer fired, set
-    //   cameraVisible=true — but the user was still on the Gallery tab, so the
-    //   CameraView never rendered.  Later, after biometric login + receipt
-    //   attachment (~30 s), the user tapped QR Scanner.  tab changed to 'qr',
-    //   the condition `cameraVisible===true` was already met, so CameraView
-    //   mounted INSTANTLY with no warm-up → raced with Kobiton's swizzle hooks
-    //   → crash on first click every time.
+    // KobitonSdk.framework crash (session 8550509, Apr 11 2026):
+    //   hook_AVCaptureConnection_setVideoOrientation fires on every new
+    //   AVCaptureSession addInput: call. After the first image injection, Kobiton
+    //   caches the injected frame. On the SECOND addInput: (QR scanner mounting
+    //   CameraView = second AVCaptureSession), Kobiton tries to re-paint the
+    //   cached frame via setSimulatedImage:/createSimulatedImage. Inside that path
+    //   it reads a plist file that was cleaned up after the first session →
+    //   NSDictionary initWithContentsOfFile: throws an uncaught ObjC exception on
+    //   captureSessionQueue → SIGABRT.
     //
-    // FIX:
-    //   Always reset cameraVisible=false at the top of this effect.
-    //   Because `tab` is in the dependency array, the effect re-runs on every
-    //   QR-tab visit.  The 1 500 ms timer then fires fresh each time the user
-    //   taps QR Scanner, regardless of how long ago permission was granted.
+    //   Fix: on iOS, never mount CameraView. KobitonCaptureModule uses a singleton
+    //   AVCaptureSession (addInput: fires once at app startup). captureFrame: only
+    //   adds/removes AVCaptureVideoDataOutput — never creates a new session.
+    //   Without a second AVCaptureSession, the crash path is unreachable.
+    if (Platform.OS === 'ios') return;
+
+    // Android: manage CameraView mount timing
     setCameraVisible(false);
     if (permission?.granted && tab === 'qr') {
-      // iOS: 1 500 ms warm-up on EVERY QR tab visit.
-      // Gives Kobiton's AVCaptureVideoDataOutput swizzle hooks time to install
-      // before CameraView creates its own AVCaptureSession.
-      // Android: 350 ms is sufficient (camera2.aar wraps at a lower level).
-      const delay = Platform.OS === 'ios' ? 1500 : 350;
-      const t = setTimeout(() => setCameraVisible(true), delay);
+      // 350 ms warm-up on every QR tab visit so camera2 surface is ready.
+      const t = setTimeout(() => setCameraVisible(true), 350);
       return () => clearTimeout(t);
     }
   }, [permission?.granted, tab]);
@@ -207,79 +205,38 @@ export default function MediaGalleryScreen() {
     }
   }
 
-  // ── iOS: KobitonCaptureModule (AVCaptureVideoDataOutput — Kobiton-swizzled) ──
+  // ── iOS: KobitonCaptureModule singleton session (no CameraView) ──────────────
   //
-  // WHY NOT takePictureAsync:
-  //   Uses AVCapturePhotoOutput, which Kobiton does NOT swizzle. Captures the
-  //   real camera scene regardless of what the live preview is showing.
+  // CameraView is NOT rendered on iOS. Rendering it would mount a second
+  // AVCaptureSession, which triggers KobitonSdk.framework's
+  // hook_AVCaptureConnection_setVideoOrientation → setSimulatedImage: crash
+  // (crash log 8550509, Apr 11 2026 — EXC_CRASH/SIGABRT on captureSessionQueue).
   //
-  // WHY NOT captureRef / react-native-view-shot:
-  //   Uses UIGraphicsBeginImageContextWithOptions (software rendering). Camera
-  //   previews are rendered via AVSampleBufferDisplayLayer (Metal/GPU-composited).
-  //   Software rendering cannot capture Metal content → always returns a black frame.
-  //
-  // SOLUTION — mirrors Android's KobitonCameraModule exactly:
-  //   1. Unmount CameraView so expo-camera releases the AVCaptureSession lock.
-  //   2. Wait 600 ms for the AVCaptureSession to FULLY tear down.
-  //      WITHOUT this delay, KobitonCaptureModule.captureFrame() opens a new
-  //      AVCaptureVideoDataOutput session while expo-camera's session is still
-  //      being torn down.  When Kobiton injects a frame it delivers it to BOTH
-  //      sessions simultaneously, causing a native crash on iOS.
-  //   3. KobitonCaptureModule opens its OWN AVCaptureSession + AVCaptureVideoDataOutput.
-  //      Kobiton swizzles EVERY AVCaptureVideoDataOutput delegate, so injected
-  //      frames will arrive in our new output too.
-  //   4. After 1 500 ms (injection settle time), arm the capture and grab the
-  //      next sample buffer → JPEG → base64.
-  //   5. Run jsQR on the JPEG bytes.
-  //   6. Re-mount CameraView.
+  // Instead, KobitonCaptureModule owns a singleton AVCaptureSession created
+  // once at first use (addInput: fires exactly once → swizzle fires once → safe).
+  // captureFrame: attaches/detaches only an AVCaptureVideoDataOutput per call —
+  // no new session, no second addInput:, no crash.
   async function captureAndDecodeIOS() {
     if (isCapturing) return;
 
-    // ── Null-guard FIRST — before any state mutation ──────────────────────────
-    // Device log (iPhone 14 Plus, session 8545105) confirms app exits at
-    // 15:42:47 with zero AVCaptureSession activity — KobitonCaptureModule was
-    // absent from the built .ipa (KobitonCaptureModule.m missing from Xcode
-    // Sources build phase after an incomplete expo prebuild).
-    //
-    // The original ordering was: setCameraVisible(false) → 600ms wait → null check.
-    // When the module is absent, the camera is already torn down before the error
-    // fires. The finally block tries to restore it, but if the component unmounted
-    // during the 600ms wait (which happens on the crash path) the state update is
-    // a no-op → user lands on a black screen with no recovery.
-    //
-    // Moving the null check HERE (before any state change) means:
-    //   • No state is mutated if the module is absent → camera stays visible.
-    //   • The Alert appears immediately with actionable text.
-    //   • The app does NOT crash — the user can still use the rest of the app.
     const mod = NativeModules.KobitonCaptureModule;
     if (!mod) {
       Alert.alert(
         'Module Not Available',
-        'KobitonCaptureModule is not registered in this build. The app needs to be rebuilt with expo prebuild --clean to include the iOS capture native module.'
+        'KobitonCaptureModule is not registered in this build. Rebuild with expo prebuild --clean to include the iOS native capture module.'
       );
       return;
     }
 
     setIsCapturing(true);
-    // Step 1: unmount CameraView to free the AVCaptureSession hardware lock
-    setCameraVisible(false);
-
-    // Step 2: wait for AVCaptureSession to fully tear down before opening a new one.
-    // This prevents the "two sessions active simultaneously" crash when Kobiton
-    // injects a frame and it lands in both the dying expo-camera session AND our
-    // new KobitonCaptureModule session at the same instant.
-    await new Promise<void>(resolve => setTimeout(resolve, 600));
-
+    // No CameraView to unmount — no teardown delay needed.
+    // The shared singleton session is already running.
     try {
-      // Step 3: open our own AVCaptureVideoDataOutput session.
-      // 2500 ms delay (enforced as a minimum by the native module too) gives
-      // Kobiton time to start injecting and lets AVCaptureSession negotiate its
-      // output format — log evidence shows 1500ms was insufficient when a prior
-      // session (receipt camera) exited uncleanly (CATransaction warning).
+      // 2500 ms arm delay: gives Kobiton time to start routing injected frames
+      // into the newly attached AVCaptureVideoDataOutput delegate.
       const b64: string = await mod.captureFrame(2500);
       if (!b64) throw new Error('captureFrame returned empty base64 data');
 
-      // Step 4: decode the JPEG with jsQR
       const qrData = await decodeQRFromBase64(b64);
       if (qrData) {
         setScannedResult({ type: 'qr', data: qrData });
@@ -296,10 +253,7 @@ export default function MediaGalleryScreen() {
       }
     } finally {
       setIsCapturing(false);
-      // Step 4: re-mount the CameraView preview
-      if (permission?.granted) {
-        setTimeout(() => setCameraVisible(true), 350);
-      }
+      // No CameraView to restore on iOS.
     }
   }
 
@@ -457,18 +411,28 @@ export default function MediaGalleryScreen() {
       <View style={{ flex: 1 }}>
         {scanning ? (
           <View style={{ flex: 1, position: 'relative' }}>
-            {cameraVisible ? (
+            {Platform.OS === 'ios' ? (
+              // iOS: static placeholder — CameraView is intentionally NOT rendered.
+              // Mounting CameraView creates a second AVCaptureSession, which triggers
+              // KobitonSdk.framework crash: hook_AVCaptureConnection_setVideoOrientation
+              // → setSimulatedImage: → NSDictionary initWithContentsOfFile: throws
+              // uncaught ObjC exception on captureSessionQueue (crash log 8550509).
+              // KobitonCaptureModule uses a singleton session — no second addInput:,
+              // no second swizzle, no crash. The "Capture & Decode" button still works.
+              <View style={[{ flex: 1 }, styles.cameraPlaceholder]}>
+                <Feather name="aperture" size={52} color="rgba(255,255,255,0.25)" />
+                <Text style={styles.iosReadyTitle}>Camera session active</Text>
+                <Text style={styles.iosReadySubtitle}>
+                  Inject a QR code image via Kobiton, then tap Capture & Decode
+                </Text>
+              </View>
+            ) : cameraVisible ? (
               <CameraView
                 ref={cameraRef as any}
                 style={{ flex: 1 }}
                 facing="back"
-                // On iOS, Kobiton SDK swizzles AVCaptureVideoDataOutput. Enabling
-                // onBarcodeScanned also activates AVCaptureMetadataOutput, and the
-                // two outputs conflict on the Kobiton-instrumented session, causing
-                // a native crash when the CameraView mounts. Disable native barcode
-                // detection on iOS — the "Capture & Decode" button handles decoding.
-                onBarcodeScanned={Platform.OS === 'android' ? handleBarcodeScanned : undefined}
-                barcodeScannerSettings={Platform.OS === 'android' ? { barcodeTypes: ['qr'] } : undefined}
+                onBarcodeScanned={handleBarcodeScanned}
+                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
               />
             ) : (
               <View style={[{ flex: 1 }, styles.cameraPlaceholder]}>
@@ -494,7 +458,7 @@ export default function MediaGalleryScreen() {
               <TouchableOpacity
                 style={[styles.captureBtn, isCapturing && styles.captureBtnBusy]}
                 onPress={captureAndDecode}
-                disabled={isCapturing || !cameraVisible}
+                disabled={isCapturing || (Platform.OS === 'android' && !cameraVisible)}
                 testID="capture-decode-btn"
               >
                 {isCapturing ? (
@@ -879,6 +843,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: Colors.textPrimary,
+    gap: 12,
+  },
+  iosReadyTitle: {
+    fontSize: Typography.sizeMd,
+    fontFamily: Typography.fontSemiBold,
+    color: 'rgba(255,255,255,0.7)',
+    textAlign: 'center',
+  },
+  iosReadySubtitle: {
+    fontSize: Typography.sizeSm,
+    fontFamily: Typography.fontRegular,
+    color: 'rgba(255,255,255,0.45)',
+    textAlign: 'center',
+    paddingHorizontal: 32,
+    lineHeight: 18,
   },
   scanBadge: {
     flexDirection: 'row',
