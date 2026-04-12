@@ -153,29 +153,33 @@ export default function LocationMockScreen() {
         // injected (e.g. Rome) instead of the device's actual location (e.g. Atlanta).
         // getCurrentPositionAsync with BestForNavigation accuracy forces FusedLocationProvider
         // to query the GPS hardware rather than returning the cached fix.
-        try {
-          const fresh = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.BestForNavigation,
-          });
-          if (!cancelled && fresh.timestamp >= screenMountedAt - 500) {
-            const { city, country } = await reverseGeocode(fresh.coords.latitude, fresh.coords.longitude);
-            if (!cancelled) {
-              setLocation({
-                latitude: fresh.coords.latitude,
-                longitude: fresh.coords.longitude,
-                accuracy: fresh.coords.accuracy ?? null,
-                altitude: fresh.coords.altitude ?? null,
-                city,
-                country,
-                receivedAt: new Date().toISOString(),
-              });
-              setStatus('received');
-              stopPulse();
+        // Android-only: iOS CoreLocation timestamps are always slightly behind the JS clock,
+        // so the timestamp guard would incorrectly reject every valid iOS fix.
+        if (Platform.OS === 'android') {
+          try {
+            const fresh = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.BestForNavigation,
+            });
+            if (!cancelled && fresh.timestamp >= screenMountedAt - 500) {
+              const { city, country } = await reverseGeocode(fresh.coords.latitude, fresh.coords.longitude);
+              if (!cancelled) {
+                setLocation({
+                  latitude: fresh.coords.latitude,
+                  longitude: fresh.coords.longitude,
+                  accuracy: fresh.coords.accuracy ?? null,
+                  altitude: fresh.coords.altitude ?? null,
+                  city,
+                  country,
+                  receivedAt: new Date().toISOString(),
+                });
+                setStatus('received');
+                stopPulse();
+              }
             }
+          } catch (e) {
+            // Fall through to watchPositionAsync — it'll deliver a fix eventually
+            console.warn('[location-mock] getCurrentPositionAsync failed, relying on watcher:', e);
           }
-        } catch (e) {
-          // Fall through to watchPositionAsync — it'll deliver a fix eventually
-          console.warn('[location-mock] getCurrentPositionAsync failed, relying on watcher:', e);
         }
 
         // Watch for real-time location updates.
@@ -196,10 +200,13 @@ export default function LocationMockScreen() {
             if (cancelled) return;
 
             // Reject the OS's cached last-known location delivered immediately on subscribe.
-            // See Phase 1 comment above for why.
-            const isInCacheWindow = Date.now() - screenMountedAt < 2000;
-            const isStaleFix = pos.timestamp < screenMountedAt - 500;
-            if (isInCacheWindow || isStaleFix) return;
+            // Android-only: iOS CoreLocation timestamps run slightly behind the JS clock so the
+            // same guards would reject every valid iOS fix, leaving the screen stuck on Acquiring.
+            if (Platform.OS === 'android') {
+              const isInCacheWindow = Date.now() - screenMountedAt < 2000;
+              const isStaleFix = pos.timestamp < screenMountedAt - 500;
+              if (isInCacheWindow || isStaleFix) return;
+            }
 
             const { city, country } = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
             if (cancelled) return;
