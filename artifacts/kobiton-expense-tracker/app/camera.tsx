@@ -62,8 +62,10 @@ function WebFallback() {
 //   captures → returns RESULT_OK with the URI. The user taps one button total.
 //
 // This mirrors exactly what the QR scanner does (CameraView preview in JS,
-// KobitonCameraActivity for the actual Kobiton-injected capture) and matches
-// the iOS IosCameraScreen flow (CameraView live preview → takePictureAsync).
+// KobitonCameraActivity for the actual Kobiton-injected capture).
+// NOTE: the iOS path (IosCameraScreen) does NOT use CameraView at all —
+// it uses KobitonCaptureModule.captureFrame via a singleton AVCaptureSession.
+// See crash logs 8550509 and 8553746 for why CameraView is banned on iOS.
 
 function AndroidKobitonCamera() {
   const router = useRouter();
