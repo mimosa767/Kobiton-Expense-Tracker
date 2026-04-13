@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   NativeModules,
@@ -257,54 +257,57 @@ function AndroidKobitonCamera() {
   );
 }
 
-// ─── iOS: expo-camera (AVCaptureSession — Kobiton image injection intercepts here) ──
+// ─── iOS: KobitonCaptureModule singleton session (no CameraView) ───────────────
 //
-// Uses expo-camera on iOS. Kobiton's KobitonSdk.framework swizzles
-// AVCaptureSession at the OS level, so it intercepts camera frames from
-// any camera library — expo-camera, vision-camera, or AVFoundation directly.
-// CameraView works natively for injection on iOS; no native activity needed.
+// CameraView is intentionally NOT rendered on iOS. Mounting CameraView creates
+// a second AVCaptureSession, which triggers KobitonSdk.framework's
+// hook_AVCaptureConnection_setVideoOrientation → setSimulatedImage: crash
+// (crash logs 8550509 and 8553746 — EXC_CRASH/SIGABRT on captureSessionQueue).
+//
+// Instead, KobitonCaptureModule owns a singleton AVCaptureSession created once
+// at app startup (addInput: fires exactly once → swizzle fires once → safe).
+// captureFrame: attaches/detaches only an AVCaptureVideoDataOutput per call —
+// no new session, no second addInput:, no crash.
+// This is the exact same pattern used by the iOS QR scanner in media-gallery.tsx.
 
 function IosCameraScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const cameraRef = useRef<CameraView>(null);
-  const [capturing, setCapturing] = useState(false);
-  const [facing, setFacing] = useState<'back' | 'front'>('back');
   const [permission, requestPermission] = useCameraPermissions();
+  const [capturing, setCapturing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Request permission immediately on mount regardless of current status.
-  //
-  // WHY: useCameraPermissions() returns null on the very first render while
-  // iOS checks the TCC database asynchronously. The previous guard
-  // `if (permission && !permission.granted)` evaluated to false when
-  // permission was null, so requestPermission() was never called — leaving
-  // AVCaptureSession starting without authorization. KobitonSdk.framework
-  // swizzles AVCaptureSession at the OS level; when the session starts before
-  // the user has granted access the SDK crashes on first attempt (works on
-  // retry because permission is already stored by then).
   useEffect(() => {
     requestPermission();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCapture = useCallback(async () => {
-    if (!cameraRef.current || capturing) return;
+    if (capturing) return;
+    const mod = NativeModules.KobitonCaptureModule;
+    if (!mod?.captureFrame) {
+      setError('KobitonCaptureModule is not registered.\nRebuild the app with expo prebuild --clean.');
+      return;
+    }
+    setCapturing(true);
     try {
-      setCapturing(true);
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.85,
-        skipProcessing: false,
-      });
-      if (!photo) {
-        setCapturing(false);
-        return;
-      }
-      const uri = photo.uri;
+      // 2500 ms arm delay: gives Kobiton time to route injected frames into
+      // the newly attached AVCaptureVideoDataOutput delegate.
+      // Same signature and rationale as captureAndDecodeIOS() in media-gallery.tsx.
+      const b64: string = await mod.captureFrame(2500);
+      if (!b64) throw new Error('captureFrame returned empty data');
+      const uri = `data:image/jpeg;base64,${b64}`;
       const fileName = `receipt_${Date.now()}.jpg`;
       callCameraCallback(uri, fileName);
       router.back();
-    } catch (err) {
-      console.error('[CameraScreen] takePictureAsync error:', err);
-      setCapturing(false);
+    } catch (err: any) {
+      if (err?.code !== 'E_CANCELLED') {
+        console.error('[CameraScreen] captureFrame error:', err);
+        setError(String(err?.message ?? err));
+        setCapturing(false);
+      } else {
+        clearCameraCallback();
+        router.back();
+      }
     }
   }, [capturing, router]);
 
@@ -313,9 +316,23 @@ function IosCameraScreen() {
     router.back();
   }, [router]);
 
-  const toggleFacing = useCallback(() => {
-    setFacing(f => f === 'back' ? 'front' : 'back');
-  }, []);
+  if (error) {
+    return (
+      <View style={styles.permissionContainer} testID="camera-error-state">
+        <Feather name="alert-triangle" size={40} color={Colors.error} />
+        <Text style={[styles.permissionText, { color: Colors.error }]} testID="camera-error-text">{error}</Text>
+        <TouchableOpacity
+          style={[styles.permissionBtn, styles.cancelBtn]}
+          onPress={handleCancel}
+          testID="camera-error-go-back"
+          accessibilityLabel="Go Back"
+          accessibilityRole="button"
+        >
+          <Text style={styles.permissionBtnText}>Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   if (!permission) {
     return (
@@ -363,11 +380,16 @@ function IosCameraScreen() {
 
   return (
     <View style={styles.container} testID="camera-active">
-      <CameraView
-        ref={cameraRef}
-        style={StyleSheet.absoluteFill}
-        facing={facing}
-      />
+      {/* iOS: static placeholder — CameraView intentionally NOT rendered.
+          See comment block above: second AVCaptureSession triggers Kobiton crash
+          (logs 8550509, 8553746). KobitonCaptureModule singleton is used instead. */}
+      <View style={[StyleSheet.absoluteFill, styles.iosPlaceholder]}>
+        <Feather name="aperture" size={52} color="rgba(255,255,255,0.25)" />
+        <Text style={styles.iosPlaceholderTitle}>Camera session active</Text>
+        <Text style={styles.iosPlaceholderSubtitle}>
+          Inject a receipt image via Kobiton, then tap Capture
+        </Text>
+      </View>
 
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity
@@ -380,15 +402,7 @@ function IosCameraScreen() {
           <Feather name="x" size={26} color={Colors.white} />
         </TouchableOpacity>
         <Text style={styles.topBarTitle}>Take Receipt Photo</Text>
-        <TouchableOpacity
-          onPress={toggleFacing}
-          style={styles.iconBtn}
-          accessibilityLabel="Flip camera"
-          accessibilityRole="button"
-          testID="camera-flip-btn"
-        >
-          <Feather name="refresh-cw" size={22} color={Colors.white} />
-        </TouchableOpacity>
+        <View style={styles.iconBtn} />
       </View>
 
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 24 }]}>
@@ -530,5 +544,24 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: 15,
     fontWeight: '600',
+  },
+  iosPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    padding: 32,
+    backgroundColor: Colors.black,
+  },
+  iosPlaceholderTitle: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 17,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  iosPlaceholderSubtitle: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 19,
   },
 });
