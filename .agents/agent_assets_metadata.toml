@@ -24,3 +24,9 @@ id = "BlzCPBcNJnsJh-1VOocUQ"
 uri = "file://artifacts/kobiton-expense-tracker/KOBITON_SDK_INTEGRATION.md"
 type = "text"
 title = "Kobiton SDK Integration Guide"
+
+[[outputs]]
+id = "u6JE7orVsDWq9fgqiJ58q"
+uri = "file://artifacts/kobiton-expense-tracker/KOBITON_IMAGE_INJECTION.md"
+type = "text"
+title = "Kobiton Image Injection — Integration Guide"
