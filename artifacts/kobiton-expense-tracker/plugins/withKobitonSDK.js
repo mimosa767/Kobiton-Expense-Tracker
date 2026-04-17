@@ -1707,8 +1707,9 @@ import com.facebook.react.bridge.ReactMethod
  *  2. Provides CPU and memory stress methods for the Device Stress Test screen.
  *
  * JS-side:
- *   NativeModules.KobitonCameraModule.openCamera()               → Promise<string>
- *   NativeModules.KobitonCameraModule.openCameraAutoCapture()    → Promise<string>
+ *   NativeModules.KobitonCameraModule.openCamera()               → Promise<string>  (file:// URI)
+ *   NativeModules.KobitonCameraModule.openCameraAutoCapture()    → Promise<string>  (file:// URI)
+ *   NativeModules.KobitonCameraModule.captureQRFrameBase64()     → Promise<string>  (raw Base64, no file write)
  *   NativeModules.KobitonCameraModule.startCpuStress(n)          → Promise<number>  (threads started)
  *   NativeModules.KobitonCameraModule.stopCpuStress()            → Promise<void>
  *   NativeModules.KobitonCameraModule.allocateNativeMemory(mb)   → Promise<number>  (MB actually allocated)
@@ -1742,13 +1743,21 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
                 pendingPromise = null
                 when (resultCode) {
                     Activity.RESULT_OK -> {
+                        val b64 = data?.getStringExtra(KobitonCameraActivity.EXTRA_PHOTO_BASE64)
                         val uri = data?.getStringExtra(KobitonCameraActivity.EXTRA_PHOTO_URI)
-                        if (uri != null) {
-                            Log.d(TAG, "KobitonCameraModule: photo received — $uri")
-                            promise.resolve(uri)
-                        } else {
-                            Log.e(TAG, "KobitonCameraModule: RESULT_OK but EXTRA_PHOTO_URI missing")
-                            promise.reject("E_NO_URI", "Camera returned RESULT_OK but no photo URI was provided")
+                        when {
+                            b64 != null -> {
+                                Log.d(TAG, "KobitonCameraModule: base64 frame received (\${b64.length} chars)")
+                                promise.resolve(b64)
+                            }
+                            uri != null -> {
+                                Log.d(TAG, "KobitonCameraModule: photo received — $uri")
+                                promise.resolve(uri)
+                            }
+                            else -> {
+                                Log.e(TAG, "KobitonCameraModule: RESULT_OK but no data extra found")
+                                promise.reject("E_NO_DATA", "Camera returned RESULT_OK but no photo data was provided")
+                            }
                         }
                     }
                     Activity.RESULT_CANCELED -> {
@@ -1788,6 +1797,37 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun openCameraAutoCapture(promise: Promise) {
         launchCamera(autoCapture = true, promise = promise)
+    }
+
+    /**
+     * Like openCameraAutoCapture() but returns the JPEG as a raw Base64 string
+     * (EXTRA_PHOTO_BASE64) instead of writing to a cache file and returning a
+     * file:// URI.  Eliminates the file-write → fetch → FileReader → jpeg-js
+     * decode chain so jsQR receives a single-compression frame — identical to
+     * the iOS KobitonCaptureModule.captureFrame() path.
+     *
+     * Used by the QR scanner in media-gallery.tsx.
+     */
+    @ReactMethod
+    fun captureQRFrameBase64(promise: Promise) {
+        try {
+            val activity = reactApplicationContext.currentActivity ?: run {
+                Log.e(TAG, "KobitonCameraModule: captureQRFrameBase64 — currentActivity is null")
+                promise.reject("E_NO_ACTIVITY", "No current Activity — ensure the app is in the foreground")
+                return
+            }
+            Log.d(TAG, "KobitonCameraModule: launching KobitonCameraActivity autoCapture=true returnBase64=true")
+            pendingPromise = promise
+            val intent = Intent(activity, KobitonCameraActivity::class.java).apply {
+                putExtra(KobitonCameraActivity.EXTRA_AUTO_CAPTURE,  true)
+                putExtra(KobitonCameraActivity.EXTRA_RETURN_BASE64, true)
+            }
+            activity.startActivityForResult(intent, CAMERA_REQUEST_CODE)
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraModule: captureQRFrameBase64 exception — \${e.javaClass.name}: \${e.message}", e)
+            pendingPromise = null
+            promise.reject("E_CAMERA_ERROR", e.message ?: "Unknown error launching camera")
+        }
     }
 
     private fun launchCamera(autoCapture: Boolean, promise: Promise) {
@@ -2137,7 +2177,18 @@ class KobitonCameraActivity : AppCompatActivity() {
          *
          * Set by KobitonCameraModule.openCameraAutoCapture().
          */
-        const val EXTRA_AUTO_CAPTURE = "autoCapture"
+        const val EXTRA_AUTO_CAPTURE  = "autoCapture"
+        /**
+         * When true the activity returns the captured JPEG as a Base64 string
+         * in EXTRA_PHOTO_BASE64 instead of writing to a cache file and
+         * returning a file:// URI in EXTRA_PHOTO_URI.  This eliminates the
+         * file-write → fetch → FileReader chain so jsQR receives a single-
+         * compression frame identical to the iOS KobitonCaptureModule path.
+         *
+         * Set by KobitonCameraModule.captureQRFrameBase64().
+         */
+        const val EXTRA_RETURN_BASE64 = "returnBase64"
+        const val EXTRA_PHOTO_BASE64  = "photoBase64"
         private const val CAPTURE_WIDTH  = 1280
         private const val CAPTURE_HEIGHT = 720
         private const val MAX_KOBITON_RETRIES = 3
@@ -2176,6 +2227,12 @@ class KobitonCameraActivity : AppCompatActivity() {
      * Kobiton-injected frame via the Kobiton camera session.
      */
     private var autoCapture = false
+
+    /**
+     * When true, return the JPEG as Base64 in EXTRA_PHOTO_BASE64 instead of
+     * writing to a cache file and returning a file:// URI.
+     */
+    private var returnBase64 = false
 
     // Snapshot of the last live-camera frame taken immediately before the
     // standard camera session is closed in takePhoto().  Used as a fallback
@@ -2277,8 +2334,9 @@ class KobitonCameraActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        autoCapture = intent.getBooleanExtra(EXTRA_AUTO_CAPTURE, false)
-        Log.d(TAG, "KobitonCameraActivity: onCreate autoCapture=$autoCapture")
+        autoCapture  = intent.getBooleanExtra(EXTRA_AUTO_CAPTURE,  false)
+        returnBase64 = intent.getBooleanExtra(EXTRA_RETURN_BASE64, false)
+        Log.d(TAG, "KobitonCameraActivity: onCreate autoCapture=$autoCapture returnBase64=$returnBase64")
         buildLayout()
     }
 
@@ -2657,13 +2715,6 @@ class KobitonCameraActivity : AppCompatActivity() {
                         bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                         bitmap.recycle()
                         val bytes = out.toByteArray()
-                        val photoFile = java.io.File(
-                            cacheDir,
-                            "kobiton_receipt_\${System.currentTimeMillis()}.jpg"
-                        )
-                        java.io.FileOutputStream(photoFile).use { it.write(bytes) }
-                        val uri = "file://\${photoFile.absolutePath}"
-                        Log.d(TAG, "KobitonCameraActivity: photo saved → $uri (\${bytes.size} bytes)")
 
                         // ── Close Kobiton session BEFORE finishing the activity ──────────────
                         // Log evidence (Apr 10 09:21–09:24): ImageInjectionClient crashed after
@@ -2680,9 +2731,28 @@ class KobitonCameraActivity : AppCompatActivity() {
                         kobitonCameraDevice   = null
                         Thread.sleep(150) // give ImageInjectionClient time to drain its queue
 
-                        runOnUiThread {
-                            setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_PHOTO_URI, uri))
-                            finish()
+                        if (returnBase64) {
+                            // Return JPEG bytes as Base64 directly — no file write, no fetch,
+                            // no FileReader.  jsQR receives a single-compression frame,
+                            // matching the iOS KobitonCaptureModule.captureFrame() path.
+                            val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                            Log.d(TAG, "KobitonCameraActivity: base64 encoded \${bytes.size} bytes → \${b64.length} chars")
+                            runOnUiThread {
+                                setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_PHOTO_BASE64, b64))
+                                finish()
+                            }
+                        } else {
+                            val photoFile = java.io.File(
+                                cacheDir,
+                                "kobiton_receipt_\${System.currentTimeMillis()}.jpg"
+                            )
+                            java.io.FileOutputStream(photoFile).use { it.write(bytes) }
+                            val uri = "file://\${photoFile.absolutePath}"
+                            Log.d(TAG, "KobitonCameraActivity: photo saved → $uri (\${bytes.size} bytes)")
+                            runOnUiThread {
+                                setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_PHOTO_URI, uri))
+                                finish()
+                            }
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "KobitonCameraActivity: image save failed — \${e.message}", e)

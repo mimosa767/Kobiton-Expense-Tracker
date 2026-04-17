@@ -171,16 +171,17 @@ export default function MediaGalleryScreen() {
         return typeof getMethod() === 'function';
       };
 
-      const methodReady = await pollForMethod(() => mod.openCameraAutoCapture, 3000);
+      const methodReady = await pollForMethod(() => mod.captureQRFrameBase64, 3000);
       if (!methodReady) {
         Alert.alert('Camera Not Ready', 'The camera module is still initializing. Please wait a moment and try again.');
         return;
       }
 
-      const uri: string = await mod.openCameraAutoCapture();
-
-      // 3. Read the captured JPEG as base64, then run jsQR on its pixels.
-      const b64 = await uriToBase64(uri);
+      // captureQRFrameBase64 returns a raw Base64 JPEG string directly —
+      // no file write, no fetch, no FileReader.  jsQR receives the same
+      // single-compression frame that iOS KobitonCaptureModule.captureFrame()
+      // delivers, eliminating the quality loss that caused "No QR Code Found".
+      const b64: string = await mod.captureQRFrameBase64();
       const qrData = await decodeQRFromBase64(b64);
 
       if (qrData) {

@@ -18,8 +18,9 @@ import com.facebook.react.bridge.ReactMethod
  *  2. Provides CPU and memory stress methods for the Device Stress Test screen.
  *
  * JS-side:
- *   NativeModules.KobitonCameraModule.openCamera()               → Promise<string>
- *   NativeModules.KobitonCameraModule.openCameraAutoCapture()    → Promise<string>
+ *   NativeModules.KobitonCameraModule.openCamera()               → Promise<string>  (file:// URI)
+ *   NativeModules.KobitonCameraModule.openCameraAutoCapture()    → Promise<string>  (file:// URI)
+ *   NativeModules.KobitonCameraModule.captureQRFrameBase64()     → Promise<string>  (raw Base64, no file write)
  *   NativeModules.KobitonCameraModule.startCpuStress(n)          → Promise<number>  (threads started)
  *   NativeModules.KobitonCameraModule.stopCpuStress()            → Promise<void>
  *   NativeModules.KobitonCameraModule.allocateNativeMemory(mb)   → Promise<number>  (MB actually allocated)
@@ -53,13 +54,21 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
                 pendingPromise = null
                 when (resultCode) {
                     Activity.RESULT_OK -> {
+                        val b64 = data?.getStringExtra(KobitonCameraActivity.EXTRA_PHOTO_BASE64)
                         val uri = data?.getStringExtra(KobitonCameraActivity.EXTRA_PHOTO_URI)
-                        if (uri != null) {
-                            Log.d(TAG, "KobitonCameraModule: photo received — $uri")
-                            promise.resolve(uri)
-                        } else {
-                            Log.e(TAG, "KobitonCameraModule: RESULT_OK but EXTRA_PHOTO_URI missing")
-                            promise.reject("E_NO_URI", "Camera returned RESULT_OK but no photo URI was provided")
+                        when {
+                            b64 != null -> {
+                                Log.d(TAG, "KobitonCameraModule: base64 frame received (${b64.length} chars)")
+                                promise.resolve(b64)
+                            }
+                            uri != null -> {
+                                Log.d(TAG, "KobitonCameraModule: photo received — $uri")
+                                promise.resolve(uri)
+                            }
+                            else -> {
+                                Log.e(TAG, "KobitonCameraModule: RESULT_OK but no data extra found")
+                                promise.reject("E_NO_DATA", "Camera returned RESULT_OK but no photo data was provided")
+                            }
                         }
                     }
                     Activity.RESULT_CANCELED -> {
@@ -99,6 +108,37 @@ class KobitonCameraModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun openCameraAutoCapture(promise: Promise) {
         launchCamera(autoCapture = true, promise = promise)
+    }
+
+    /**
+     * Like openCameraAutoCapture() but returns the JPEG as a raw Base64 string
+     * (EXTRA_PHOTO_BASE64) instead of writing to a cache file and returning a
+     * file:// URI.  Eliminates the file-write → fetch → FileReader → jpeg-js
+     * decode chain so jsQR receives a single-compression frame — identical to
+     * the iOS KobitonCaptureModule.captureFrame() path.
+     *
+     * Used by the QR scanner in media-gallery.tsx.
+     */
+    @ReactMethod
+    fun captureQRFrameBase64(promise: Promise) {
+        try {
+            val activity = reactApplicationContext.currentActivity ?: run {
+                Log.e(TAG, "KobitonCameraModule: captureQRFrameBase64 — currentActivity is null")
+                promise.reject("E_NO_ACTIVITY", "No current Activity — ensure the app is in the foreground")
+                return
+            }
+            Log.d(TAG, "KobitonCameraModule: launching KobitonCameraActivity autoCapture=true returnBase64=true")
+            pendingPromise = promise
+            val intent = Intent(activity, KobitonCameraActivity::class.java).apply {
+                putExtra(KobitonCameraActivity.EXTRA_AUTO_CAPTURE,  true)
+                putExtra(KobitonCameraActivity.EXTRA_RETURN_BASE64, true)
+            }
+            activity.startActivityForResult(intent, CAMERA_REQUEST_CODE)
+        } catch (e: Exception) {
+            Log.e(TAG, "KobitonCameraModule: captureQRFrameBase64 exception — ${e.javaClass.name}: ${e.message}", e)
+            pendingPromise = null
+            promise.reject("E_CAMERA_ERROR", e.message ?: "Unknown error launching camera")
+        }
     }
 
     private fun launchCamera(autoCapture: Boolean, promise: Promise) {
