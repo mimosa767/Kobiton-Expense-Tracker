@@ -171,13 +171,13 @@ export default function MediaGalleryScreen() {
         return typeof getMethod() === 'function';
       };
 
-      const methodReady = await pollForMethod(() => mod.openCameraAutoCapture, 3000);
+      const methodReady = await pollForMethod(() => mod.openCamera, 3000);
       if (!methodReady) {
         Alert.alert('Camera Not Ready', 'The camera module is still initializing. Please wait a moment and try again.');
         return;
       }
 
-      const uri: string = await mod.openCameraAutoCapture();
+      const uri: string = await mod.openCamera();
 
       // 3. Read the captured JPEG as base64, then run jsQR on its pixels.
       const b64 = await uriToBase64(uri);
