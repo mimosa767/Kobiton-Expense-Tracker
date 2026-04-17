@@ -6,7 +6,6 @@ import {
   Dimensions,
   Image,
   NativeModules,
-  PermissionsAndroid,
   Platform,
   ScrollView,
   StyleSheet,
@@ -41,7 +40,7 @@ export default function MediaGalleryScreen() {
   const [copyConfirmed, setCopyConfirmed] = useState(false);
   const [cameraVisible, setCameraVisible] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
-  const cameraRef = useRef<CameraView | null>(null);
+  const cameraRef = useRef<CameraView | null>(null); // iOS only — Android uses onBarcodeScanned
 
   useEffect(() => {
     if (tab === 'qr' && Platform.OS !== 'web') {
@@ -80,29 +79,9 @@ export default function MediaGalleryScreen() {
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
   /**
-   * Reads a local file:// URI and returns its contents as a base64 string.
-   * Uses the global FileReader (available in both Hermes and JSC) so no
-   * extra package is required.
-   */
-  async function uriToBase64(uri: string): Promise<string> {
-    const response = await fetch(uri);
-    const blob = await response.blob();
-    return new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        // result is "data:<mime>;base64,<data>" — strip the prefix
-        const comma = result.indexOf(',');
-        resolve(comma >= 0 ? result.slice(comma + 1) : result);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  /**
    * Decode a base64 JPEG with jpeg-js + jsQR and resolve the scanned QR data,
    * or null if no QR code was found in the frame.
+   * iOS only — Android uses CameraView onBarcodeScanned (ML Kit).
    */
   async function decodeQRFromBase64(b64: string): Promise<string | null> {
     // Buffer is a Node.js API that does NOT exist in Hermes (Android's JS
@@ -116,93 +95,6 @@ export default function MediaGalleryScreen() {
     const { data, width, height } = jpeg.decode(bytes, { useTArray: true });
     const code = jsQR(new Uint8ClampedArray(data), width, height);
     return code ? code.data : null;
-  }
-
-  // ── Android: use KobitonCameraModule (kobiton.hardware.camera2) ──────────────
-  // expo-camera / CameraX uses Android's camera2 API but CameraX does NOT
-  // expose the Kobiton-injected frames through its live preview or takePicture
-  // until KobitonCameraActivity has run at least once in the session to warm
-  // up kobiton.hardware.camera2. Calling KobitonCameraModule.openCameraAutoCapture()
-  // directly is the reliable path because it always uses the Kobiton CameraManager.
-  async function captureAndDecodeAndroid() {
-    if (isCapturing) return;
-    setIsCapturing(true);
-    // Unmount CameraView before launching KobitonCameraActivity so both don't
-    // compete for the camera2 hardware resource simultaneously.
-    setCameraVisible(false);
-    try {
-      // 1. Request camera permission (Android 6+)
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.CAMERA,
-        {
-          title: 'Camera Permission',
-          message: 'Camera access is required to capture and decode QR codes.',
-          buttonPositive: 'Allow',
-          buttonNegative: 'Cancel',
-        }
-      );
-      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-        Alert.alert('Permission Denied', 'Camera permission is required to scan QR codes.');
-        return;
-      }
-
-      // 2. Open KobitonCameraActivity — this uses kobiton.hardware.camera2
-      //    and will capture the Kobiton-injected frame.
-      const mod = NativeModules.KobitonCameraModule;
-      if (!mod) {
-        Alert.alert('Not Available', 'KobitonCameraModule is not registered in this build.');
-        return;
-      }
-
-      // Settle delay: CameraView surface teardown is async (~300ms).  The
-      // PermissionsAndroid.request() above resolves almost instantly when
-      // already granted, leaving no time for the surface to release.
-      await new Promise<void>(resolve => setTimeout(resolve, 350));
-
-      // Poll for the method instead of a single retry — log evidence shows the
-      // method is still unavailable at 956ms after surface teardown, so a single
-      // 600ms retry is not enough.  Poll every 300ms for up to 3 000ms.
-      const pollForMethod = async (getMethod: () => any, maxMs: number): Promise<boolean> => {
-        const deadline = Date.now() + maxMs;
-        while (Date.now() < deadline) {
-          if (typeof getMethod() === 'function') return true;
-          await new Promise<void>(r => setTimeout(r, 300));
-        }
-        return typeof getMethod() === 'function';
-      };
-
-      const methodReady = await pollForMethod(() => mod.openCamera, 3000);
-      if (!methodReady) {
-        Alert.alert('Camera Not Ready', 'The camera module is still initializing. Please wait a moment and try again.');
-        return;
-      }
-
-      const uri: string = await mod.openCamera();
-
-      // 3. Read the captured JPEG as base64, then run jsQR on its pixels.
-      const b64 = await uriToBase64(uri);
-      const qrData = await decodeQRFromBase64(b64);
-
-      if (qrData) {
-        setScannedResult({ type: 'qr', data: qrData });
-        setScanning(false);
-      } else {
-        Alert.alert(
-          'No QR Code Found',
-          'The captured frame did not contain a readable QR code. Make sure the injected image is a valid QR code and try again.'
-        );
-      }
-    } catch (err: any) {
-      if (err?.code !== 'E_CANCELLED') {
-        Alert.alert('Capture Error', String(err?.message ?? err));
-      }
-    } finally {
-      setIsCapturing(false);
-      // Restore camera preview after KobitonCameraActivity returns
-      if (permission?.granted) {
-        setTimeout(() => setCameraVisible(true), 350);
-      }
-    }
   }
 
   // ── iOS: KobitonCaptureModule singleton session (no CameraView) ──────────────
@@ -257,12 +149,9 @@ export default function MediaGalleryScreen() {
     }
   }
 
+  // Android uses CameraView onBarcodeScanned (ML Kit) — no manual capture needed.
   function captureAndDecode() {
-    if (Platform.OS === 'android') {
-      captureAndDecodeAndroid();
-    } else {
-      captureAndDecodeIOS();
-    }
+    captureAndDecodeIOS();
   }
 
   const receiptImages = expenses
@@ -448,30 +337,32 @@ export default function MediaGalleryScreen() {
               </View>
               <Text style={styles.scanHint} pointerEvents="none">
                 {Platform.OS === 'android'
-                  ? 'Point at a QR code — or use Capture'
+                  ? 'Point camera at a QR code to scan'
                   : 'Use Capture & Decode to read the injected QR code'}
               </Text>
               <View style={styles.scanBadge} pointerEvents="none">
                 <Feather name="zap" size={11} color={Colors.primary} />
                 <Text style={styles.scanBadgeText}>Kobiton image injection ready</Text>
               </View>
-              <TouchableOpacity
-                style={[styles.captureBtn, isCapturing && styles.captureBtnBusy]}
-                onPress={captureAndDecode}
-                disabled={isCapturing || (Platform.OS === 'android' && !cameraVisible)}
-                testID="capture-decode-btn"
-                accessibilityLabel={isCapturing ? 'Decoding' : 'Capture and Decode'}
-                accessibilityRole="button"
-              >
-                {isCapturing ? (
-                  <ActivityIndicator size="small" color={Colors.white} accessibilityLabel="Decoding QR code" />
-                ) : (
-                  <Feather name="camera" size={18} color={Colors.white} accessible={false} />
-                )}
-                <Text style={styles.captureBtnText}>
-                  {isCapturing ? 'Decoding…' : 'Capture & Decode'}
-                </Text>
-              </TouchableOpacity>
+              {Platform.OS !== 'android' && (
+                <TouchableOpacity
+                  style={[styles.captureBtn, isCapturing && styles.captureBtnBusy]}
+                  onPress={captureAndDecode}
+                  disabled={isCapturing}
+                  testID="capture-decode-btn"
+                  accessibilityLabel={isCapturing ? 'Decoding' : 'Capture and Decode'}
+                  accessibilityRole="button"
+                >
+                  {isCapturing ? (
+                    <ActivityIndicator size="small" color={Colors.white} accessibilityLabel="Decoding QR code" />
+                  ) : (
+                    <Feather name="camera" size={18} color={Colors.white} accessible={false} />
+                  )}
+                  <Text style={styles.captureBtnText}>
+                    {isCapturing ? 'Decoding…' : 'Capture & Decode'}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         ) : (
