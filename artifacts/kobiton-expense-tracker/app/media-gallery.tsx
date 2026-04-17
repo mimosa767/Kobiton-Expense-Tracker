@@ -67,6 +67,32 @@ export default function MediaGalleryScreen() {
     //   Without a second AVCaptureSession, the crash path is unreachable.
     if (Platform.OS === 'ios') return;
 
+    // ── Android: DO NOT add a manual capture-and-decode button to this screen ──
+    //
+    // <CameraView onBarcodeScanned> is backed natively by Google ML Kit
+    // (play-services-mlkit-barcode-scanning 18.3.1 / barcode-scanning 17.3.0 —
+    // confirmed in APK /assets/mlkit_barcode_models/). ML Kit runs continuously
+    // against the CameraX ImageAnalysis stream. Kobiton image injection lands
+    // on that same CameraX surface via ImageInjectionClient MITM intercept, so
+    // ML Kit decodes injected QR codes in ~1 frame with no user action.
+    //
+    // Adding a manual capture path (e.g. openCamera() → KobitonCameraActivity)
+    // tears down the CameraX session, opens a new android.hardware.camera2
+    // session for live preview (Phase 1), then opens a THIRD camera session
+    // (kobiton.hardware.camera2) for capture (Phase 2). The ImageInjectionClient
+    // socket established during Phase 1 is closed before Phase 2 opens
+    // (TrustServerClient.injectionImageSet → SocketException: Socket closed,
+    // confirmed device logs 04-17 16:17:43 and 04-17 17:32:08). The Kobiton
+    // session in Phase 2 never receives the injected frame.
+    //
+    // Evidence: working APK f7708e40 (Apr 17 2026) contains no jsQR, no
+    // captureQRFrameBase64, no KobitonCameraActivity launch path — only
+    // onBarcodeScanned. Both barhopper::deep_learning::OnedDecoderClient and
+    // ImageInjectionClient.setupSurfaceIntercept fire on the same surface.
+    //
+    // Matching invariant on iOS: "DO NOT ADD <CameraView> TO THE iOS RENDER PATH"
+    // (commit ba41729) — KobitonSdk.framework SIGABRT on second AVCaptureSession.
+
     // Android: manage CameraView mount timing
     setCameraVisible(false);
     if (permission?.granted && tab === 'qr') {
@@ -316,8 +342,12 @@ export default function MediaGalleryScreen() {
                 </Text>
               </View>
             ) : cameraVisible ? (
+              // DO NOT add a manual capture-and-decode button for Android.
+              // onBarcodeScanned is backed by ML Kit on the same CameraX surface
+              // Kobiton intercepts — injected QR codes decode in ~1 frame automatically.
+              // See the matching comment in the useEffect above for the full failure
+              // mode that a manual KobitonCameraActivity path causes.
               <CameraView
-                ref={cameraRef as any}
                 style={{ flex: 1 }}
                 facing="back"
                 onBarcodeScanned={handleBarcodeScanned}
