@@ -348,6 +348,7 @@ export default function ExpensesScreen() {
             <TouchableOpacity
               onPress={() => setSearchQuery('')}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              testID="clear-search-btn"
               accessibilityLabel="Clear search"
               accessibilityRole="button"
             >
@@ -405,6 +406,7 @@ export default function ExpensesScreen() {
 
       {isLoading ? null : (
         <FlatList
+          testID="expense-list"
           data={filteredExpenses}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
