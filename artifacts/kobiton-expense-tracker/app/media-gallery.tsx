@@ -119,11 +119,26 @@ export default function MediaGalleryScreen() {
   }
 
   // ── Android: use KobitonCameraModule (kobiton.hardware.camera2) ──────────────
-  // expo-camera / CameraX uses Android's camera2 API but CameraX does NOT
-  // expose the Kobiton-injected frames through its live preview or takePicture
-  // until KobitonCameraActivity has run at least once in the session to warm
-  // up kobiton.hardware.camera2. Calling KobitonCameraModule.openCameraAutoCapture()
-  // directly is the reliable path because it always uses the Kobiton CameraManager.
+  //
+  // INVARIANT — DO NOT CHANGE openCamera() to openCameraAutoCapture():
+  //
+  //   openCamera()         → launches KobitonCameraActivity with autoCapture=false
+  //                          Phase 1: standard android.hardware.camera2 preview runs
+  //                          while user primes Kobiton injection in the portal.
+  //                          Phase 1 is the window Kobiton uses to establish its
+  //                          session — getCameraIdList() is populated by the time
+  //                          the user taps Capture. Phase 2 then opens into a
+  //                          ready Kobiton session and captures the injected frame.
+  //
+  //   openCameraAutoCapture() → skips Phase 1 entirely. Kobiton's session has not
+  //                          had time to configure. getCameraIdList() returns empty.
+  //                          6×500ms retries all fail → finishCancelled() → JS
+  //                          promise rejects with E_CANCELLED. QR decode never runs.
+  //
+  // This was confirmed by git archaeology (commits e6aba9a / 3515d5a = working,
+  // bde2ba3+ = broken) and validated in a live Kobiton session (build a569f62f,
+  // commit b508626). Phase 1 warm-up time is NOT optional.
+  //
   async function captureAndDecodeAndroid() {
     if (isCapturing) return;
     setIsCapturing(true);
@@ -171,13 +186,15 @@ export default function MediaGalleryScreen() {
         return typeof getMethod() === 'function';
       };
 
+      // ⚠️  MUST be openCamera (autoCapture=false). See invariant above.
+      //     DO NOT change to openCameraAutoCapture — it breaks Kobiton injection.
       const methodReady = await pollForMethod(() => mod.openCamera, 3000);
       if (!methodReady) {
         Alert.alert('Camera Not Ready', 'The camera module is still initializing. Please wait a moment and try again.');
         return;
       }
 
-      const uri: string = await mod.openCamera();
+      const uri: string = await mod.openCamera(); // autoCapture=false — Phase 1 warm-up is required
 
       // 3. Read the captured JPEG as base64, then run jsQR on its pixels.
       const b64 = await uriToBase64(uri);
