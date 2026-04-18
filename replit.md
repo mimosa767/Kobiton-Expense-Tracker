@@ -95,6 +95,30 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 
 Cross-platform mobile expense tracking app (Expo / React Native + TypeScript). Targets iOS, Android, and Web (via Expo for Web).
 
+**⚠️ KOBITON CAMERA INVARIANTS — DO NOT CHANGE WITHOUT READING THIS:**
+
+1. **Android QR scanner MUST use `mod.openCamera()` (autoCapture=false), never `openCameraAutoCapture()`.**
+   - `openCamera()` runs Phase 1 (standard camera preview) THEN Phase 2 (Kobiton capture).
+   - Phase 1 is the time window Kobiton uses to configure its session. By the time the user taps Capture, `getCameraIdList()` is populated and Phase 2 opens into a ready session.
+   - `openCameraAutoCapture()` skips Phase 1 → Kobiton session not configured → `getCameraIdList()` empty → 6×500ms retries fail → `finishCancelled()` → E_CANCELLED → QR decode never runs.
+   - Confirmed broken by: commits `bde2ba3`→`d4c8a3c`→`2b77c61` (all used `openCameraAutoCapture`, all failed).
+   - Confirmed working: commits `e6aba9a`, `3515d5a`, `b508626` (all use `openCamera()`).
+
+2. **Android receipt camera uses `openCameraAutoCapture()` in `camera.tsx` — this is correct and different from QR.**
+   - The receipt camera doesn't need the Phase 1 warm-up because the user explicitly starts the camera flow themselves, giving enough time.
+
+3. **iOS MUST NOT render `<CameraView>` anywhere in the app.**
+   - Rendering `<CameraView>` creates a second `AVCaptureSession`. Kobiton's SDK caches the injected frame and tries to repaint it onto the new session → SIGABRT crash.
+   - iOS uses the singleton `KobitonCaptureModule.captureFrame(2500)` only. No `<CameraView>` on iOS — ever.
+
+4. **Do NOT add a manual capture button on Android inside `<CameraView>`.**
+   - `CameraView` on Android uses CameraX ImageAnalysis, which does not receive Kobiton-injected frames.
+   - The Capture & Decode button calls `captureAndDecodeAndroid()` → `openCamera()` → `KobitonCameraActivity`. This is the only path that works.
+
+**EAS build command:** `EAS_SKIP_AUTO_FINGERPRINT=1 eas build --platform android --profile preview --non-interactive --no-wait`
+**android/ must use `git add -f`** (gitignored)
+**Last confirmed working build:** `a569f62f` (commit `b508626`)
+
 **Kobiton branding**: deep blue primary `#0F2D8A`, teal accent `#00BCD4`, surface `#F4F6FB`.
 
 **Features**:
