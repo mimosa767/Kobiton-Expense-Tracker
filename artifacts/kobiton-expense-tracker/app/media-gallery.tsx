@@ -122,22 +122,27 @@ export default function MediaGalleryScreen() {
   //
   // INVARIANT — DO NOT CHANGE openCamera() to openCameraAutoCapture():
   //
-  //   openCamera()         → launches KobitonCameraActivity with autoCapture=false
-  //                          Phase 1: standard android.hardware.camera2 preview runs
-  //                          while user primes Kobiton injection in the portal.
-  //                          Phase 1 is the window Kobiton uses to establish its
-  //                          session — getCameraIdList() is populated by the time
-  //                          the user taps Capture. Phase 2 then opens into a
-  //                          ready Kobiton session and captures the injected frame.
+  //   openCamera()         → launches KobitonCameraActivity with autoCapture=false.
+  //                          The user sees the Phase 1 live-camera preview and taps
+  //                          Capture manually. That human-speed delay is long enough
+  //                          for Kobiton's session to finish configuring before
+  //                          Phase 2 fires. QR injection captured reliably.
   //
-  //   openCameraAutoCapture() → skips Phase 1 entirely. Kobiton's session has not
-  //                          had time to configure. getCameraIdList() returns empty.
-  //                          6×500ms retries all fail → finishCancelled() → JS
+  //   openCameraAutoCapture() → fires capture automatically on surface-ready.
+  //                          In the Media Gallery entry path, expo-camera's CameraView
+  //                          has just released the camera hardware (setCameraVisible
+  //                          false → surface teardown). openCameraAutoCapture() races
+  //                          Kobiton's session setup and wins: bitmap captured BEFORE
+  //                          "Kobiton session configured" appears in the log.
+  //                          getCameraIdList() returns empty, 6×500ms retries all fail,
   //                          promise rejects with E_CANCELLED. QR decode never runs.
   //
-  // This was confirmed by git archaeology (commits e6aba9a / 3515d5a = working,
-  // bde2ba3+ = broken) and validated in a live Kobiton session (build a569f62f,
-  // commit b508626). Phase 1 warm-up time is NOT optional.
+  // NOTE: openCameraAutoCapture() works correctly in camera.tsx (receipt capture)
+  // because that flow does NOT have a prior CameraX session releasing the hardware
+  // immediately before the call. The race condition is specific to this entry path.
+  //
+  // Confirmed by git archaeology (e6aba9a / 3515d5a = working, bde2ba3+ = broken)
+  // and validated in a live Kobiton session (build a569f62f, commit b508626).
   //
   async function captureAndDecodeAndroid() {
     if (isCapturing) return;

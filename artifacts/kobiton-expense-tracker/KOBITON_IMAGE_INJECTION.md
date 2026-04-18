@@ -60,18 +60,18 @@ That single import swap is what causes Kobiton to intercept camera frames in you
 **How capture works on Android:**
 
 `KobitonCameraActivity` uses a two-phase approach:
-- **Phase 1** — standard `android.hardware.camera2` preview (the user sees the live camera). This is also the window Kobiton uses to configure its injection session.
-- **Phase 2** — `kobiton.hardware.camera2` capture. Runs after Phase 1, by which time `getCameraIdList()` is populated and the injected frame can be captured.
+- **Phase 1** — standard `android.hardware.camera2` preview. The user sees the live camera and sets up injection in the portal.
+- **Phase 2** — `kobiton.hardware.camera2` capture. Fires after the user taps Capture (or automatically for receipt camera).
 
-**QR scanner** (`media-gallery.tsx`) calls `openCamera()` — autoCapture=false, so Phase 1 runs and the user taps Capture manually. **This must not be changed to `openCameraAutoCapture()`.**
+**QR scanner** (`media-gallery.tsx`) must call `openCamera()` — autoCapture=false, user taps Capture manually. **Do not change this to `openCameraAutoCapture()`.**
 
 ```typescript
 // QR scanner — MUST use openCamera() (autoCapture=false)
-// Phase 1 warm-up time is required for Kobiton session configuration.
+// The manual tap gives Kobiton's session time to configure. See note below.
 const uri: string = await NativeModules.KobitonCameraModule.openCamera();
 ```
 
-**Receipt camera** (`camera.tsx`) calls `openCameraAutoCapture()` — Phase 1 is still entered briefly, but capture fires automatically once the surface is ready.
+**Receipt camera** (`camera.tsx`) correctly calls `openCameraAutoCapture()` — capture fires automatically once the surface is ready.
 
 ```typescript
 // Receipt camera — openCameraAutoCapture() is correct here
@@ -80,7 +80,11 @@ const uri: string = await NativeModules.KobitonCameraModule.openCameraAutoCaptur
 
 Unmount `<CameraView>` before either call so both don't hold the camera hardware simultaneously.
 
-> ⚠️ **CRITICAL:** Using `openCameraAutoCapture()` for the QR scanner skips Phase 1, leaving no time for Kobiton to configure its session. `getCameraIdList()` returns empty, all retries fail, the promise rejects with `E_CANCELLED`, and QR decode never runs. This was validated across multiple Kobiton sessions (confirmed broken: commits `bde2ba3`→`2b77c61`; confirmed working: `e6aba9a`, `b508626`).
+> ⚠️ **CRITICAL — timing race, not a missing phase:** `openCameraAutoCapture()` fails in the QR scanner because of a race condition specific to the Media Gallery entry path. When the user taps Capture & Decode, `expo-camera`'s `CameraView` has just released the camera hardware (`setCameraVisible(false)` → surface teardown). `openCameraAutoCapture()` fires capture automatically on surface-ready and wins the race against Kobiton's session setup — `bitmap captured` appears in the log *before* `Kobiton session configured`. The result: `getCameraIdList()` is empty, 6×500ms retries all fail, the promise rejects with `E_CANCELLED`.
+>
+> `openCameraAutoCapture()` works correctly in `camera.tsx` (receipt capture) because that flow has no prior CameraX session releasing the hardware immediately before the call. The race is entry-path-specific.
+>
+> The fix — `openCamera()` with a manual tap — inserts human-speed delay that is long enough for Kobiton's session to finish configuring before Phase 2 fires. Confirmed broken: `bde2ba3`→`2b77c61`. Confirmed working: `e6aba9a`, `b508626`.
 
 ---
 
@@ -191,7 +195,7 @@ export default function CameraScreen() {
 
 **Android:** Forgetting to replace `android.hardware.camera2` with `kobiton.hardware.camera2`. If the import isn't swapped, Kobiton has no intercept point and your app just captures the real camera frame.
 
-**Android QR scanner:** Calling `openCameraAutoCapture()` instead of `openCamera()` in the QR scanner flow. `openCameraAutoCapture()` skips Phase 1 (standard camera preview), which is the time window Kobiton uses to configure its session. Without Phase 1, `getCameraIdList()` is empty when Phase 2 starts, all retries fail, the JS promise rejects with `E_CANCELLED`, and the QR decode never runs. Always use `openCamera()` in `media-gallery.tsx`. (`openCameraAutoCapture()` is correct only for the receipt camera in `camera.tsx`.)
+**Android QR scanner:** Calling `openCameraAutoCapture()` instead of `openCamera()` in `media-gallery.tsx`. This triggers a race condition specific to the Media Gallery entry path: `expo-camera`'s `CameraView` has just released the camera hardware when `openCameraAutoCapture()` is called, and its automatic capture fires before Kobiton's session finishes configuring. `getCameraIdList()` returns empty, all retries fail, the promise rejects with `E_CANCELLED`, and QR decode never runs. Always use `openCamera()` (manual tap) in `media-gallery.tsx` — the human delay is what gives Kobiton's session time to configure. (`openCameraAutoCapture()` is correct in `camera.tsx` because that entry path has no prior CameraX session releasing the hardware.)
 
 **iOS:** Rendering `<CameraView>` anywhere in the app — even on a different screen from your capture button. Any `<CameraView>` mount creates a second `AVCaptureSession` and will crash the app as soon as Kobiton starts injecting. Replace all iOS camera UI with a static placeholder.
 

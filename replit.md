@@ -98,14 +98,14 @@ Cross-platform mobile expense tracking app (Expo / React Native + TypeScript). T
 **⚠️ KOBITON CAMERA INVARIANTS — DO NOT CHANGE WITHOUT READING THIS:**
 
 1. **Android QR scanner MUST use `mod.openCamera()` (autoCapture=false), never `openCameraAutoCapture()`.**
-   - `openCamera()` runs Phase 1 (standard camera preview) THEN Phase 2 (Kobiton capture).
-   - Phase 1 is the time window Kobiton uses to configure its session. By the time the user taps Capture, `getCameraIdList()` is populated and Phase 2 opens into a ready session.
-   - `openCameraAutoCapture()` skips Phase 1 → Kobiton session not configured → `getCameraIdList()` empty → 6×500ms retries fail → `finishCancelled()` → E_CANCELLED → QR decode never runs.
-   - Confirmed broken by: commits `bde2ba3`→`d4c8a3c`→`2b77c61` (all used `openCameraAutoCapture`, all failed).
-   - Confirmed working: commits `e6aba9a`, `3515d5a`, `b508626` (all use `openCamera()`).
+   - This is a **timing race condition** specific to the Media Gallery entry path, not a missing phase.
+   - When the user taps Capture & Decode, `expo-camera`'s `CameraView` has just released the camera hardware (`setCameraVisible(false)` → surface teardown). `openCameraAutoCapture()` fires automatically on surface-ready and wins the race against Kobiton's session setup — `bitmap captured` fires before `Kobiton session configured` in the log. `getCameraIdList()` is empty, retries fail, promise rejects with `E_CANCELLED`.
+   - `openCamera()` (manual tap) inserts human-speed delay that is long enough for Kobiton's session to finish configuring before Phase 2 fires.
+   - `openCameraAutoCapture()` works fine in `camera.tsx` (receipt) because that entry path has no prior CameraX session releasing the hardware immediately before the call.
+   - Confirmed broken: `bde2ba3`→`d4c8a3c`→`2b77c61`. Confirmed working: `e6aba9a`, `3515d5a`, `b508626`.
 
-2. **Android receipt camera uses `openCameraAutoCapture()` in `camera.tsx` — this is correct and different from QR.**
-   - The receipt camera doesn't need the Phase 1 warm-up because the user explicitly starts the camera flow themselves, giving enough time.
+2. **Android receipt camera uses `openCameraAutoCapture()` in `camera.tsx` — this is correct and intentionally different.**
+   - No prior CameraX session releases the hardware before this call, so there is no race condition.
 
 3. **iOS MUST NOT render `<CameraView>` anywhere in the app.**
    - Rendering `<CameraView>` creates a second `AVCaptureSession`. Kobiton's SDK caches the injected frame and tries to repaint it onto the new session → SIGABRT crash.
