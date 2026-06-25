@@ -259,8 +259,14 @@ export default function ExpensesScreen() {
   ), [expenses, isFiltered, filteredExpenses.length, activeCategory, searchQuery]);
 
   const menuActions = showMenu ? (
-    <Pressable style={styles.overlay} onPress={() => setShowMenu(false)} testID="menu-overlay">
-      <Pressable style={styles.dropdownMenu} onPress={() => {}}>
+    // accessible={false} on BOTH Pressables: each has an onPress (close-on-tap
+    // / swallow-tap), which makes a Pressable an accessibility element by
+    // default. On iOS an accessible parent collapses its whole subtree into one
+    // element, hiding every child testID (logout-button, etc.) from XCUITest —
+    // which is why ~menu-overlay was findable but nothing inside it was. Marking
+    // both non-accessible keeps the touch handlers but exposes the children.
+    <Pressable style={styles.overlay} onPress={() => setShowMenu(false)} testID="menu-overlay" accessible={false}>
+      <Pressable style={styles.dropdownMenu} onPress={() => {}} accessible={false}>
         <View style={styles.menuHeader}>
           <Text style={styles.menuHeaderText}>Menu</Text>
           <TouchableOpacity
