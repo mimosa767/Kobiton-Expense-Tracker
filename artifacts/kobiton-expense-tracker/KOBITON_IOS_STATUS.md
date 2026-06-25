@@ -1,6 +1,6 @@
 # Kobiton iOS Integration — Current Status
 
-Last updated: 2026-04-05  
+Last updated: 2026-06-25  
 Plugin version: 4.2.0
 
 ---
@@ -81,7 +81,7 @@ AppDelegate now emits these `NSLog` lines at every launch:
 
 1. **NSLog visibility:** Does `NSLog` output from ObjC/Swift native modules appear in the Kobiton portal's device log viewer? We have never seen any `[KOBITON]` or `[DIAG]` lines in the portal logs across 15+ builds, even though the code is confirmed present in the generated AppDelegate.
 
-2. **expo-local-authentication intercept:** Does `KobitonLAContext.framework` intercept `LAContext` calls made inside third-party libraries like `expo-local-authentication`? The framework replaces `LAContext` at the class level, but it is unclear whether this intercept applies to library code that statically links against `LocalAuthentication.framework`.
+2. **expo-local-authentication intercept:** ✅ **RESOLVED (2026-06-25).** `KobitonLAContext.framework` *does* intercept the `LAContext` calls made inside `expo-local-authentication`. Verified end-to-end via the iOS biometric login e2e test (`@workspace/e2e-tests` → `login-biometric.e2e.ts`) on an iPhone 12 Pro Max / iOS 26.1, build version 766511: tapping the biometric button → `authenticateAsync()` → injecting `driver.execute('mobile:biometrics-authenticate', { result: 'passed' })` drives the auth to success and logs the user in. So the fallback path (expo-local-authentication via `KobitonLAContext`) works even though `NativeModules.KobitonBiometricModule` is null on iOS — the original question of whether the class-level `LAContext` replacement reaches statically-linked library code is answered: it does.
 
 3. **"inject unsuccessfully" meaning:** The portal shows "inject unsuccessfully" when biometric injection is attempted, even though `KobitonSdk.framework` is confirmed loading (camera throttled to 15 fps). What does this error mean on the platform side, and what prerequisite is missing?
 

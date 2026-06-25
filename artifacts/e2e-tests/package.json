@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test:login:ios": "tsx ./src/login.e2e.ts",
+    "test:biometric:ios": "tsx ./src/login-biometric.e2e.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
