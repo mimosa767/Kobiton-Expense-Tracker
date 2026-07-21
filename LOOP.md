@@ -42,88 +42,179 @@ TIMESTAMPS / LOG:
 -->
 
 status: NEEDS_CHAT
-area: OUT-OF-BAND (Stephen-directed, not a chat-authored TASK): (1) confirmed the Kobiton tag API is real, (2) migrated the whole toolkit to the v2 API, (3) made device-group targeting real via teams. See "## RESULT (from CC)" → "v2 migration" below. Turn 2 (Scenario 7 allocator) remains accepted. Turn 3 = Scenario 6 deploy engine (Appium/webdriverio) is still the next planned chat TASK.
-turn: 4
-updated: 2026-07-21 13:14 EDT
+area: Turn 4 — Scenario 6: bulk deploy engine (Appium/webdriverio arrives NOW). Turns 1-2 accepted; OOB v2 migration accepted (teams = device groups, tags real, 42/42 tests, commit 1d8ed34). This turn: session layer + deploy orchestrator + CSV/JSON reports + lockfile fix. Live verify = dry-run first, then ONE online Android device max.
+turn: 5
+updated: 2026-07-21 13:51 EDT
 
 ---
 
 ## TASK (from chat)
 
-### TASK (turn 2) — Scenario 7: dynamic device allocation (`src/allocation/`)
+### TASK (turn 4) — Scenario 6: bulk deploy engine (`src/appium/` + `src/deployment/`)
 
-**Context.** Turn 1 foundation is accepted. This turn builds the device allocator that
-Scenario 6 (bulk deploy, turn 3) will consume. STILL no Appium/webdriverio, NO session
-creation, NO reservations — the allocator SELECTS a device and emits ready-to-use Appium
-capabilities; actually opening sessions arrives in turn 3. All API calls remain read-only.
+**Context.** Turns 1-2 and the OOB v2 migration are accepted. Appium/webdriverio is now IN
+scope. The engine consumes the allocator (fixed list or dynamic criteria), deploys the
+Expense Tracker (Android app 690059, `kobiton-store:v765569` per resolver) across target
+devices, and reports. Stephen's guardrails hold: dry-run before any real run, dev
+concurrency cap 3, live verification this turn touches at MOST ONE device.
 
-**Carry-over findings from turn 1 (do not re-derive):** `/v1/devices` groups devices as
-top-level arrays (privateDevices/cloudDevices/etc.) with no per-device numeric group id;
-apps resolve via `nativeProperties.package` (Android) / `CFBundleIdentifier` (iOS);
-device `state` and version `nativeProperties` are nullable.
+**0. Lockfile (bounced from turn 2 — chat's call is (a), scoped regenerate).** Stash ALL
+unrelated working-tree changes (mockup-sandbox, e2e-tests, .gitignore), restore
+`pnpm-lock.yaml` to HEAD, run `pnpm install` so the lock picks up ONLY committed
+package.jsons (yours), verify your 42 tests still pass, commit the lock on the branch,
+pop the stash. If the regenerated lock still drags in unrelated entries because those
+packages' package.json changes are themselves committed on main, STOP, report what you
+see, and commit nothing — do not commit a lock you can't explain.
 
-**0. Commit discipline (new, applies from now on).** Commit turn 1's work plus this turn's
-work on a branch `kobiton-automation` (or main if Stephen has said so in chat — if unsure,
-branch). LOOP.md and CLAUDE.md get committed too. Conventional messages, one commit per
-logical unit. Never force-push.
+**1. Session layer** `src/appium/session.ts` (+ webdriverio dep):
+- `createKobitonSession(caps, opts)` → connects to `https://api.kobiton.com/wd/hub`
+  (overridable via `KOBITON_HUB_URL`) with Basic auth from the same env creds. Timeouts
+  explicit (session request, command). Returns a thin wrapper exposing exactly what the
+  engine needs: `isAppInstalled(pkg)`, `removeApp(pkg)`, `installApp(kobitonStoreUrl)`,
+  `activateApp(pkg)`, `queryAppState(pkg)` (if supported — verify live, don't assume),
+  `terminate()`. All calls logged (device name + step, never creds).
+- `kobiton:options` in caps: sessionName ("bulk-deploy <timestamp>"), sessionDescription,
+  app = `kobiton-store:<versionId>`.
 
-**1. Device-groups gap (bounced from turn 1 — resolve it).** Probe, read-only, whether a
-device-groups/teams endpoint exists (try `/v1/deviceGroups`, `/v1/device-groups`,
-`/v1/groups`, `/v1/teams`; check response of `/v1/user` or org endpoints for group hints).
-Report exactly what works. If a usable endpoint exists, add `src/api/groups.ts` + wire a
-`--group <name>` filter. If none does, implement group targeting as: deviceGroup source
-(PRIVATE/CLOUD) + deviceName/platform/version/tag filters, and document the limitation in
-README + RESULT. Do NOT guess at undocumented fields.
+**2. Deploy engine** `src/deployment/deploy-engine.ts`:
+- Input: DeployPlan { app (bundleId or explicit version id), platform, targets (explicit
+  udids[] OR dynamic criteria incl. --team/--tags), concurrency (default 2, hard cap 3
+  for now), retries (default 1), dryRun }.
+- Pipeline per device: allocate (fixed for explicit udids; dynamic pulls next available,
+  excludeUdids accumulates) → session → remove-if-present → install → activate → verify
+  (installed + activated; version check where the platform exposes it — report what
+  Android actually gives you) → terminate (ALWAYS, finally-block).
+- Worker pool honoring concurrency; one device's failure never stops the run; each device
+  retries up to `retries` times; on session-create failure in dynamic mode, re-allocate a
+  different device (this is the excludeUdids hook working for real).
+- Per-device timing captured (start, end, per-step durations).
 
-**2. Allocator module** `src/allocation/`:
-- `types.ts` — AllocationRequest: mode (fixed|dynamic); fixed: udid required; dynamic:
-  platform, model (deviceName match), platformVersion (exact or major-version prefix),
-  deviceGroup, groupName?, tags?, plus options { excludeUdids?, strategy? }.
-- `fixed-allocator.ts` — validate the UDID exists and report its online/booked state;
-  return device + caps. (Per Stephen's guardrail: even fixed mode WARNS when the device
-  is booked/offline and returns a clear error rather than proceeding blindly.)
-- `dynamic-allocator.ts` — query via the turn-1 client, filter by criteria, partition into
-  matching / busy / offline / available, select via a pluggable strategy (implement
-  `first-available` now; leave the Strategy interface ready for round-robin / LRU later),
-  and return { device, capabilities, diagnostics }.
-- `capabilities.ts` — build W3C-style Appium caps for a selected device: platformName,
-  `appium:deviceName`, `appium:platformVersion`, `appium:udid`, plus `kobiton:` option
-  placeholders (sessionName, sessionDescription, deviceGroup, app). Pure function, unit
-  tested; turn 3 plugs these straight into webdriverio.
-- No-match behavior: a typed NoMatchingDeviceError whose message lists what was requested
-  and the closest misses (e.g. "2 matched but busy, 1 matched but offline").
-- Retry hook: allocator accepts `excludeUdids` so turn 3 can re-allocate after a failed
-  session without repeating a bad device.
+**3. Reports** `src/deployment/report.ts`:
+- Console summary in the spec's shape: per-device ✓/✗ lines then "N Successful / M Failed".
+- `--report-dir` (default `./reports/`): `deploy-<timestamp>.json` (full detail: device,
+  udid, steps, timings, errors, retries) and `.csv` (one row per device). Unit test both
+  serializers.
 
-**3. Logging.** Structured, matches the spec's example shape: criteria echo → "Found N
-matching" → busy/offline/available breakdown → "Selected: <name>". Debug level shows the
-filter pipeline. No secrets in logs.
+**4. Dry-run (first-class, not a stub anymore):** resolves the app, allocates/filters
+targets, prints the full plan (device list w/ online state, app, version, steps that WOULD
+run, concurrency) — zero sessions created. `deploy` still refuses without --dry-run or
+--confirm.
 
-**4. CLI.** Make `allocate` real (read-only): `--mode fixed --udid X` and `--mode dynamic
---platform android --model "Pixel" --version 15 [--group NAME] [--tags a,b]
-[--exclude-udids ...] [--json]`. Prints selection + the caps it would use. A
-`--create-session` flag exists but exits with "arrives in turn 3".
+**5. CLI:** wire `deploy` for real: `--bundle-id | --app-version-id`, `--platform`,
+`--udids a,b | --model/--version/--team/--tags`, `--concurrency`, `--retries`,
+`--dry-run/--confirm`, `--report-dir`, `--json`.
 
-**5. Tests.** Unit tests for: filtering (each criterion + combinations), version prefix
-matching, partitioning, strategy selection, exclude list, no-match error content, caps
-builder, fixed-mode validation. Use turn-1's sanitized fixtures + new ones as needed.
+**6. Tests:** engine unit-tested with a mocked session layer (success path, remove-fails,
+install-fails, retry-then-success, session-create-fail→re-allocate, concurrency ordering,
+report content). No live sessions in unit tests.
 
-**Verify:** root `pnpm run typecheck` (mockup-sandbox failure is known pre-existing —
-report my package's line), package tests, live read-only CLI runs: one dynamic allocation
-against real data (expect offline-heavy results if the lab is down — that IS a valid
-result), one fixed allocation against Galaxy S21 Ultra 5G `R5CR80WYSBX`, one deliberate
-no-match (e.g. --platform ios --model "Pixel"). Paste real output.
+**Verify:**
+- Root typecheck (your package's line) + all unit tests.
+- Live DRY-RUN: `deploy --bundle-id com.kobiton.expensetracker --platform android
+  --model Pixel --dry-run` — paste the plan output.
+- Live REAL run against EXACTLY ONE device, concurrency 1: pick an online available
+  Android device dynamically (Pixel 8 Pro class was online at turn 2). Full pipeline:
+  remove (it may not be installed — that's a valid path), install v765569, activate,
+  verify, terminate, and paste the console summary + generated JSON report (trim noise).
+  If NO Android device is online, run dry-run only, say so, and stop — do not wait/grind.
+- Confirm the Kobiton session appears server-side: note the session name so chat can
+  verify it via MCP afterward.
 
-**Out of scope:** sessions, reservations, Appium, deploy engine, reports, MCP scenarios.
+**Out of scope:** iOS live run (target list & caps must support it; execution next turn),
+rollback/version-diff/smoke-test stretch goals, MCP scenarios, CI wiring.
 
 ---
-[reference only — turn 1 (foundation: REST client auth/devices/apps, CLI skeleton, smoke,
-14 tests, live-verified; API findings carried into turn 2 context above) is COMPLETE and
-accepted by chat; do NOT redo. Full details in git history once committed and in ## Log.]
+[reference only — turns 1 (foundation), 2 (allocator), OOB (v2 migration: teams/tags,
+commit 1d8ed34) are COMPLETE and accepted; do NOT redo. Details in git history + ## Log.]
 
 ---
 
 ## RESULT (from CC)
+
+### Turn 4 done — Scenario 6 bulk deploy engine (Appium live). Status: NEEDS_CHAT.
+
+**Commit `085b9d9`** on branch `kobiton-automation` (code only; lock NOT committed — see item 0).
+
+**1. Session layer — `src/appium/session.ts` (+ `webdriverio` dep):**
+`createKobitonSession(caps, opts)` connects to the Kobiton wd/hub
+(`https://api.kobiton.com/wd/hub`, override `KOBITON_HUB_URL`) with Basic auth
+via new `loadHubCredentials()` (username+apiKey, env-only, never logged). Thin
+`KobitonSession` wrapper: `isAppInstalled / removeApp / installApp / activateApp /
+queryAppState / terminate`, each logged `[device] step`. `buildDeployCapabilities()`
+installs-from-store via `appium:app` + `fullReset` (Kobiton's reliable
+remove+install at session start) with platform-correct automationName +
+`kobiton:options`. Verified live: **Android `queryAppState` DOES work → returns 4
+(FOREGROUND)**.
+
+**2. Deploy engine — `src/deployment/deploy-engine.ts`:**
+`DeployEngine.run(plan)` → resolve app → allocate targets (fixed udids via
+FixedAllocator, or dynamic via DynamicAllocator incl. `--team`/`--tags`) → deploy.
+Per-device pipeline: `session`(=remove+install via caps) → `verify-installed` →
+`activate` → `verify-state` → `terminate` (ALWAYS, finally). Bounded worker pool
+(concurrency default 2, **hard cap 3**), per-device retries (default 1), and
+**dynamic re-allocation on session-create failure** (a `DynamicPool` serialises
+allocations + accumulates excludeUdids — the retry hook, live). Per-step timings
+captured. Pure `deployToTargets()` core is the unit-test seam.
+
+**3. Reports — `src/deployment/report.ts`:** console summary (per-device ✓/✗ then
+`N Successful / M Failed`) + `deploy-<ts>.json` (full detail) + `.csv` (one row/
+device) under `--report-dir` (default `./reports/`).
+
+**4. Dry-run:** first-class — resolves app, allocates/filters targets, prints the
+plan, **zero sessions**. `deploy` still refuses without `--dry-run`/`--confirm`.
+
+**5. CLI `deploy` real:** `--bundle-id|--app-version-id --platform
+--udids|--model/--version/--team/--tags --group --max --concurrency --retries
+--report-dir --dry-run/--confirm --json`.
+
+**6. Tests:** **53 pass** (11 new via a mocked session factory: success,
+verify-installed-fail, session/install-fail, retry-then-success,
+session-fail→re-allocate, concurrency order, terminate-error tolerated; + JSON/CSV
+serializers). No live sessions in unit tests.
+
+**Verification (real output):**
+- My-pkg typecheck exit 0. Root `pnpm run typecheck` still RED **only** on
+  pre-existing `e2e-tests` (untracked `cop`-typo file) + `mockup-sandbox` (react
+  types) — my line clean.
+- **Live DRY-RUN** `deploy --bundle-id com.kobiton.expensetracker --platform
+  android --model Pixel --dry-run`: app→`kobiton-store:v765569`; 27 Pixels matched,
+  3 available; plan targets 1 (Pixel 10), zero sessions.
+- **Live REAL run, ONE device, concurrency 1** (`--model Pixel --max 1
+  --concurrency 1 --retries 1 --confirm`): selected **Pixel 8 Pro
+  `3B100DLJG000ZK`**; session created → isAppInstalled=true → activate →
+  queryAppState=4 → terminate. Console: `✓ Pixel 8 Pro … installed, state 4 in
+  19554ms` / **1 Successful / 0 Failed**. JSON+CSV written to `reports/`.
+- **Session for chat MCP verify:** name `bulk-deploy 2026-07-21T17:50:25.481Z —
+  Pixel 8 Pro`, id `a9ec47e4-f36f-4741-8a1f-896bd54a4a5b`, device udid
+  `3B100DLJG000ZK`. (Server-side session should be visible via Kobiton MCP
+  `getSession`/`listSessions`.)
+
+**0. Lockfile — STOPPED per the guardrail, committed nothing.** Followed the
+procedure: stashed unrelated changes, `git checkout HEAD -- pnpm-lock.yaml`,
+`pnpm install`. The regenerated lock adds importers for **both**
+`kobiton-automation` (mine) AND `e2e-tests` (+1421 lines). The e2e-tests importer
+is dragged in because **committed `artifacts/e2e-tests/package.json` depends on
+`webdriverio@^9.20.0` but HEAD's lock has no e2e-tests importer** — a pre-existing
+committed/lock inconsistency, NOT a working-tree change I can stash away. So a
+"mine-only" lock is impossible; per item 0 I committed no lock and popped the
+stash. webdriverio is installed locally (so build/tests/live all ran). **Chat's
+call:** either (a) fix e2e-tests's lock inconsistency on its own branch/PR then
+regenerate here, or (b) accept a lock commit that includes e2e-tests, or (c) leave
+the lock uncommitted as today. I used `webdriverio@^9.20.0` to match e2e-tests.
+
+**Left uncommitted (unchanged from before / not mine):** `pnpm-lock.yaml`,
+`.gitignore`, all `artifacts/e2e-tests/*`. Generated `reports/` left untracked.
+
+**Notes / for chat:** install rides on the session `appium:app`+`fullReset` caps
+(Kobiton's reliable path), so the "remove+install" is the `session` step — the
+wrapper also exposes runtime `removeApp`/`installApp` but the live flow uses
+caps-install (documented in session.ts). udid-pinning caveat: wd/hub selects by
+deviceName+version+group, so Kobiton picks a matching device (there was one Pixel
+8 Pro); the allocator's exact-udid choice isn't hard-pinned into the session.
+**Out of scope (untouched):** iOS live run, rollback/version-diff, MCP scenarios,
+CI. No camera code, no testID surface (no RN UI), no destructive commands.
+
+---
 
 ### v2 migration + tag/teams discovery (Stephen-directed, 2026-07-21). Status: NEEDS_CHAT.
 
@@ -277,3 +368,5 @@ read-only. Naming call I made unilaterally: `--team` (new) vs overloading
 | 2026-07-21 11:15 EDT | CHAT | Accepted turn 1. Wrote turn 2 TASK: Scenario 7 allocator (fixed+dynamic, pluggable strategy, excludeUdids retry hook, caps builder, no-match diagnostics), resolve device-groups gap via read-only endpoint probe, make `allocate` CLI real (read-only), commit discipline starts (branch kobiton-automation, incl. turn 1 + LOOP/CLAUDE). Sessions/Appium still deferred to turn 3. Turn-1 TASK compressed to reference note | NEEDS_CC |
 | 2026-07-21 12:18 EDT | CC | Turn 2: built src/allocation/ (types, capabilities, strategy, dynamic+fixed allocators, errors, logger) + 27 tests; made `allocate` CLI real (read-only). Device-groups gap RESOLVED via read-only probe: no deviceGroups/teams endpoint (404s; /v1/organizations 405; /v1/users/me exposes only user teams, no device mapping) → targeting = deviceGroup source + platform/model/version/tags; devices DO carry tags+modelName (now parsed), --group-name advisory only. Verified: my pkg typecheck exit 0, 41/41 tests pass; root build RED only on pre-existing e2e-tests (untracked `cop` typo file) + mockup-sandbox (react types skew) — not mine. Live: dynamic→Pixel 8 Pro selected, fixed R5CR80WYSBX→offline WARN+error, ios/Pixel→no-match, exclude→falls through to Pixel 10. Committed on branch kobiton-automation (ce0b759 foundation, ef9a558 allocator). Bounced: pnpm-lock.yaml NOT committed — +1425 lines entangled with unrelated mockup-sandbox/e2e-tests churn; need chat's call. No camera/testID/destructive/EAS | NEEDS_CHAT |
 | 2026-07-21 13:14 EDT | CC | OUT-OF-BAND (Stephen-directed, not a chat TASK): confirmed Kobiton tag API is v2 + device "groups" are teams (resolves the turn-2 device-groups gap). Migrated whole toolkit to v2: devices GET /v2/devices(+?teamId) snake_case→domain, apps GET /v2/apps paged, NEW teams.ts (/v2/teams) + tags.ts (/v2/tags/devices); allocator --team is real group filter (replaces advisory --group-name), --tags cross-refs /v2/tags/devices; new `teams` CLI cmd. Live writes (authorized): deleted cc-test-tag; left cc-demo assigned to Galaxy S22 R5CT20GEBAL. Verified: 42/42 tests, my-pkg typecheck clean, live teams/team-scope/resolve/allocate/--tags all green; root build RED only on pre-existing e2e-tests+mockup-sandbox. Commit 1d8ed34. Tag/team WRITES intentionally NOT exposed (read-only). No camera/testID/destructive/EAS | NEEDS_CHAT |
+| 2026-07-21 13:22 EDT | CHAT | Accepted turn 2 + OOB v2 migration. Wrote turn 4 TASK: Scenario 6 deploy engine — webdriverio session layer (wd/hub, kobiton-store install), deploy orchestrator (worker pool, retries, excludeUdids re-allocation, always-terminate), CSV/JSON reports, first-class dry-run, real `deploy` CLI. Lockfile decision: (a) scoped regenerate via stash+restore+install, abort if unexplainable. Live verify: dry-run + ONE online Android device max, session name reported for MCP cross-check. iOS live run + stretch goals deferred | NEEDS_CC |
+| 2026-07-21 13:51 EDT | CC | Turn 4: built appium/session.ts (wd/hub, loadHubCredentials, thin wrapper, buildDeployCapabilities install-via-appium:app+fullReset) + deployment/{types,deploy-engine,report} — DeployEngine.run: resolve app→allocate(fixed/dynamic incl team/tags)→worker pool (concurrency cap 3, retries, dynamic re-allocate on session-fail via DynamicPool)→pipeline session/verify-installed/activate/verify-state/terminate(finally)→JSON+CSV+console reports; first-class dry-run; real `deploy` CLI. 53/53 tests (11 new, mocked session). Live: dry-run (27 Pixels/3 avail); REAL 1-device run Pixel 8 Pro 3B100DLJG000ZK → installed, appState 4, 19.5s, 1/0. Session `bulk-deploy 2026-07-21T17:50:25.481Z — Pixel 8 Pro` id a9ec47e4-f36f-4741-8a1f-896bd54a4a5b for MCP cross-check. Android queryAppState works (=4). Item 0 lockfile: STOPPED/committed nothing — regenerate necessarily drags e2e-tests (committed webdriverio dep, absent from HEAD lock); chat's call. Commit 085b9d9 (code only). No camera/testID/destructive/EAS | NEEDS_CHAT |
