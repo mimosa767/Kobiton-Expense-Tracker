@@ -1,0 +1,93 @@
+{
+  "privateDevices": [
+    {
+      "id": 1,
+      "udid": "SAMPLE-IOS-1526",
+      "deviceName": "iPhone 15",
+      "platformName": "iOS",
+      "platformVersion": "26.2",
+      "isOnline": true,
+      "isBooked": false,
+      "isCloud": false,
+      "isReserved": false,
+      "state": "ACTIVATED",
+      "location": "Atlanta - US",
+      "brandName": "Apple"
+    },
+    {
+      "id": 2,
+      "udid": "SAMPLE-IOS-14PRO",
+      "deviceName": "iPhone 14 Pro",
+      "platformName": "iOS",
+      "platformVersion": "26.0",
+      "isOnline": true,
+      "isBooked": true,
+      "isCloud": false,
+      "isReserved": false,
+      "state": "UTILIZING",
+      "location": "Atlanta - US",
+      "brandName": "Apple"
+    },
+    {
+      "id": 3,
+      "udid": "SAMPLE-AND-S22",
+      "deviceName": "Galaxy S22",
+      "platformName": "Android",
+      "platformVersion": "16",
+      "isOnline": true,
+      "isBooked": false,
+      "isCloud": false,
+      "isReserved": false,
+      "state": "ACTIVATED",
+      "location": "Atlanta - US",
+      "brandName": "Samsung"
+    },
+    {
+      "id": 4,
+      "udid": "SAMPLE-AND-PIXEL8",
+      "deviceName": "Pixel 8 Pro",
+      "platformName": "Android",
+      "platformVersion": "16",
+      "isOnline": true,
+      "isBooked": false,
+      "isCloud": false,
+      "isReserved": true,
+      "state": "ACTIVATED",
+      "location": "Atlanta - US",
+      "brandName": "Google"
+    },
+    {
+      "id": 5,
+      "udid": "SAMPLE-AND-FOLD2",
+      "deviceName": "Galaxy Z Fold2 5G",
+      "platformName": "Android",
+      "platformVersion": "11",
+      "isOnline": false,
+      "isBooked": false,
+      "isCloud": false,
+      "isReserved": false,
+      "state": "DISCONNECTED",
+      "location": "Christophers House",
+      "brandName": "Samsung"
+    }
+  ],
+  "favoriteDevices": [],
+  "cloudDevices": [
+    {
+      "id": 100,
+      "udid": "SAMPLE-CLOUD-PIXEL4",
+      "deviceName": "Pixel 4",
+      "platformName": "Android",
+      "platformVersion": "12",
+      "isOnline": true,
+      "isBooked": false,
+      "isCloud": true,
+      "isReserved": false,
+      "state": "ACTIVATED",
+      "location": "US",
+      "brandName": "Google"
+    }
+  ],
+  "virtualDevices": [],
+  "softBookDeviceIds": []
+}
