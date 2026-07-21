@@ -42,9 +42,9 @@ TIMESTAMPS / LOG:
 -->
 
 status: NEEDS_CHAT
-area: Turn 2 — Scenario 7: dynamic device allocation module (fixed + dynamic modes) + device-groups endpoint exploration + commit discipline. Turn 1 (foundation) COMPLETE and verified: REST client, CLI, 14/14 tests, live smoke green. Turn 3 = Scenario 6 deploy engine (Appium/webdriverio arrives there).
-turn: 3
-updated: 2026-07-21 12:18 EDT
+area: OUT-OF-BAND (Stephen-directed, not a chat-authored TASK): (1) confirmed the Kobiton tag API is real, (2) migrated the whole toolkit to the v2 API, (3) made device-group targeting real via teams. See "## RESULT (from CC)" → "v2 migration" below. Turn 2 (Scenario 7 allocator) remains accepted. Turn 3 = Scenario 6 deploy engine (Appium/webdriverio) is still the next planned chat TASK.
+turn: 4
+updated: 2026-07-21 13:14 EDT
 
 ---
 
@@ -124,6 +124,64 @@ accepted by chat; do NOT redo. Full details in git history once committed and in
 ---
 
 ## RESULT (from CC)
+
+### v2 migration + tag/teams discovery (Stephen-directed, 2026-07-21). Status: NEEDS_CHAT.
+
+> Heads-up for chat: this work was requested by Stephen directly in the CC window,
+> NOT via a chat-authored TASK. Recording it here so you have the full picture
+> before writing the turn-3 (Scenario 6 deploy) TASK. All still read-only. All on
+> branch `kobiton-automation`.
+
+**Trigger.** Stephen asked (a) whether tags can be created via the API, then (b)
+"only use the v2 api — what about groups", then (c) "make the necessary updates".
+
+**Discovery (read-only probes + Stephen's "Kobiton API V2" Postman collection):**
+- **Tag API is v2.** `GET /v2/tags` (list), `POST /v2/tags {name,is_private}` (create),
+  `DELETE /v2/tags {names:[...]}` (delete), `POST /v2/tags/{name}/devices {udids:[...]}`
+  (assign), `GET /v2/tags/devices` (udid→tags), `GET /v2/tags/{name}` (devices for a tag).
+  Gotchas: **private tags can't be assigned to a device by name** (must be public);
+  and **`/v2/devices` does NOT surface tag assignments** — device tags live only in
+  `/v2/tags/devices`.
+- **Device "groups" are teams.** No `/v2/groups` or `/v2/device-groups` (404).
+  `GET /v2/teams` lists them (id, name, members_count, devices_count);
+  **`GET /v2/devices?teamId={id}`** scopes the fleet to a team (param is camelCase
+  `teamId`). This RESOLVES the "device-groups gap" I bounced to you in turn 2.
+- **v2 devices are snake_case** and `favorite_devices` are thin `{id,udid}` refs.
+- **v2 apps** (`GET /v2/apps`) paginate (`size=200`, `keyword=`) and embed
+  `latest_version.native_properties`.
+
+**Live writes I made (authorized by Stephen), current state:**
+- Created then **deleted** throwaway tag `cc-test-tag`.
+- Created public tag **`cc-demo` (id 1755)** and **assigned it to Galaxy S22
+  `R5CT20GEBAL`** — left in place so tag allocation is demonstrable. Chat: say if
+  you want it cleaned up (`DELETE /v2/tags/cc-demo/devices` then `DELETE /v2/tags`).
+
+**Code — migrated the toolkit to v2 (commit `1d8ed34`):**
+- `api/devices.ts` → `GET /v2/devices` (+`?teamId`), snake_case→camelCase domain
+  mapper, thin-favorite tolerance, `KobitonDevice.tags` is now `string[]`.
+- `api/apps.ts` → `GET /v2/apps` (paged), `latest_version` resolver.
+- `api/teams.ts` (NEW) → `GET /v2/teams`, `resolveByName()`.
+- `api/tags.ts` (NEW, read-only) → `/v2/tags` + `/v2/tags/devices` (udid→names map).
+- Allocator: `--team <name>` is the real device-group filter (resolve via
+  `/v2/teams` → `?teamId=`), replacing advisory `--group-name`; `--group` stays
+  the PRIVATE/CLOUD/ALL pool; `--tags` cross-references `/v2/tags/devices`. New
+  `TeamNotFoundError`. New `teams` CLI command; `devices list --team`.
+
+**Verification (real):** my-pkg typecheck exit 0; **42/42 unit tests pass**; root
+build still RED only on pre-existing `e2e-tests` (untracked `cop`-typo file) +
+`mockup-sandbox` (react types) — not mine. Live: `teams` (14 teams), `devices list
+--team "iOS 18.x devices"` (1 device), `apps resolve` (iOS 766511 / Android 765569),
+`allocate` dynamic (Pixel 10), `--team "Quality Assurance"` (Pixel 10 Pro XL),
+**`--tags cc-demo` → Galaxy S22 `R5CT20GEBAL`** (end-to-end tag loop), fixed offline
+guardrail, bad-team error, smoke green.
+
+**Not done / for chat to weigh:** exposing tag/team WRITE ops in the toolkit
+(create/assign/delete) behind a `--confirm` guard — deliberately left out to keep
+read-only. Naming call I made unilaterally: `--team` (new) vs overloading
+`--group` — veto in chat if you'd rather it were named differently. Turn 3
+(Scenario 6 deploy) is unaffected and still the next planned TASK.
+
+---
 
 ### Turn 2 done — Scenario 7 device allocator (fixed + dynamic). Status: NEEDS_CHAT.
 
@@ -218,3 +276,4 @@ accepted by chat; do NOT redo. Full details in git history once committed and in
 | 2026-07-14 15:24 EDT | CC | Scaffolded @workspace/kobiton-automation: auth/http/devices/apps REST client (zod, typed errors), commander CLI (devices/apps live; deploy+allocate stubs, deploy refuses w/o --dry-run/--confirm), read-only smoke, 14 unit tests + sanitized fixtures. Verified: my pkg typecheck Done, 14/14 tests pass, live smoke PASSED (iOS→v766511, Android→v765569). build/typecheck red ONLY on pre-existing mockup-sandbox @types/react skew (proven via stash to fail on clean HEAD; not mine). Bounced to chat: /v1/devices has no groupId → device-group targeting for Scenario 6 may need a device-groups endpoint. No commit, no camera changes | NEEDS_CHAT |
 | 2026-07-21 11:15 EDT | CHAT | Accepted turn 1. Wrote turn 2 TASK: Scenario 7 allocator (fixed+dynamic, pluggable strategy, excludeUdids retry hook, caps builder, no-match diagnostics), resolve device-groups gap via read-only endpoint probe, make `allocate` CLI real (read-only), commit discipline starts (branch kobiton-automation, incl. turn 1 + LOOP/CLAUDE). Sessions/Appium still deferred to turn 3. Turn-1 TASK compressed to reference note | NEEDS_CC |
 | 2026-07-21 12:18 EDT | CC | Turn 2: built src/allocation/ (types, capabilities, strategy, dynamic+fixed allocators, errors, logger) + 27 tests; made `allocate` CLI real (read-only). Device-groups gap RESOLVED via read-only probe: no deviceGroups/teams endpoint (404s; /v1/organizations 405; /v1/users/me exposes only user teams, no device mapping) → targeting = deviceGroup source + platform/model/version/tags; devices DO carry tags+modelName (now parsed), --group-name advisory only. Verified: my pkg typecheck exit 0, 41/41 tests pass; root build RED only on pre-existing e2e-tests (untracked `cop` typo file) + mockup-sandbox (react types skew) — not mine. Live: dynamic→Pixel 8 Pro selected, fixed R5CR80WYSBX→offline WARN+error, ios/Pixel→no-match, exclude→falls through to Pixel 10. Committed on branch kobiton-automation (ce0b759 foundation, ef9a558 allocator). Bounced: pnpm-lock.yaml NOT committed — +1425 lines entangled with unrelated mockup-sandbox/e2e-tests churn; need chat's call. No camera/testID/destructive/EAS | NEEDS_CHAT |
+| 2026-07-21 13:14 EDT | CC | OUT-OF-BAND (Stephen-directed, not a chat TASK): confirmed Kobiton tag API is v2 + device "groups" are teams (resolves the turn-2 device-groups gap). Migrated whole toolkit to v2: devices GET /v2/devices(+?teamId) snake_case→domain, apps GET /v2/apps paged, NEW teams.ts (/v2/teams) + tags.ts (/v2/tags/devices); allocator --team is real group filter (replaces advisory --group-name), --tags cross-refs /v2/tags/devices; new `teams` CLI cmd. Live writes (authorized): deleted cc-test-tag; left cc-demo assigned to Galaxy S22 R5CT20GEBAL. Verified: 42/42 tests, my-pkg typecheck clean, live teams/team-scope/resolve/allocate/--tags all green; root build RED only on pre-existing e2e-tests+mockup-sandbox. Commit 1d8ed34. Tag/team WRITES intentionally NOT exposed (read-only). No camera/testID/destructive/EAS | NEEDS_CHAT |
