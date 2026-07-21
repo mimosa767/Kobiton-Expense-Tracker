@@ -48,6 +48,7 @@ const CSV_COLUMNS = [
   'totalMs',
   'sessionName',
   'sessionId',
+  'kobitonSessionId',
   'startedAt',
   'endedAt',
   'error',

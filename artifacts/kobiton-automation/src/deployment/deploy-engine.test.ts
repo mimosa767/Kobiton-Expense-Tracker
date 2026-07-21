@@ -25,6 +25,7 @@ function scriptedFactory(script: Record<string, FakeBehavior[]>) {
     return {
       deviceName: name,
       sessionId: `sess-${name}`,
+      kobitonSessionId: undefined,
       async isAppInstalled() {
         calls.push({ device: name, step: 'isAppInstalled' });
         return b.installed ?? true;

@@ -60,7 +60,10 @@ export interface DeviceDeployResult {
   endedAt: string;
   totalMs: number;
   sessionName?: string;
+  /** WebDriver session UUID. */
   sessionId?: string;
+  /** Kobiton numeric session id (for portal/MCP cross-check). */
+  kobitonSessionId?: number;
   /** App state (0–4) from queryAppState, if the platform reported it. */
   appState?: number;
   installedVerified?: boolean;

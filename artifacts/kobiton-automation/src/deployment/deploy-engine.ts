@@ -73,6 +73,7 @@ export async function deployToTargets(
     const startedAt = clock();
     let session: KobitonSession | undefined;
     let sessionId: string | undefined;
+    let kobitonSessionId: number | undefined;
     let appState: number | undefined;
     let installedVerified: boolean | undefined;
     let failedStep: DeployStepName | undefined;
@@ -109,6 +110,7 @@ export async function deployToTargets(
 
       session = await run('session', () => sessionFactory(caps, { logger, deviceName: device.deviceName }));
       sessionId = session.sessionId;
+      kobitonSessionId = session.kobitonSessionId;
 
       if (pkg) {
         installedVerified = await run('verify-installed', async () => {
@@ -148,6 +150,7 @@ export async function deployToTargets(
       totalMs: now() - startMs,
       sessionName,
       sessionId,
+      kobitonSessionId,
       appState,
       installedVerified,
       failedStep,

@@ -34,6 +34,7 @@ export const APP_STATE = {
 /** The subset of Appium/WebdriverIO commands the session wrapper drives. */
 interface AppiumDriver {
   sessionId: string;
+  capabilities: Record<string, unknown>;
   isAppInstalled(appId: string): Promise<boolean>;
   removeApp(appId: string): Promise<void>;
   installApp(appPath: string): Promise<void>;
@@ -44,7 +45,10 @@ interface AppiumDriver {
 
 export interface KobitonSession {
   readonly deviceName: string;
+  /** WebDriver session UUID. */
   readonly sessionId: string | undefined;
+  /** Kobiton's numeric session id (from `kobiton:session`) — use for portal/MCP cross-check. */
+  readonly kobitonSessionId: number | undefined;
   isAppInstalled(pkg: string): Promise<boolean>;
   removeApp(pkg: string): Promise<void>;
   installApp(appRef: string): Promise<void>;
@@ -106,11 +110,14 @@ export async function createKobitonSession(
     connectionRetryCount: 0,
     ...(opts.commandTimeoutMs ? { waitforTimeout: opts.commandTimeoutMs } : {}),
   })) as unknown as AppiumDriver;
-  step(`session created (${driver.sessionId}).`);
+  const rawId = driver.capabilities?.['kobiton:session'] ?? driver.capabilities?.['kobitonSessionId'];
+  const kobitonSessionId = rawId !== undefined && rawId !== null ? Number(rawId) : undefined;
+  step(`session created (wd ${driver.sessionId}, kobiton ${kobitonSessionId ?? '?'}).`);
 
   return {
     deviceName,
     sessionId: driver.sessionId,
+    kobitonSessionId,
     async isAppInstalled(pkg) {
       const installed = await driver.isAppInstalled(pkg);
       step(`isAppInstalled(${pkg}) → ${installed}`);
@@ -177,9 +184,13 @@ export function buildDeployCapabilities(input: DeployCapabilityInput): Webdriver
     'appium:app': input.appRef,
     'appium:noReset': false,
     'appium:fullReset': fullReset,
+    // Verified live 2026-07-21 (session 8806389): Kobiton honors sessionName /
+    // sessionDescription only as TOP-LEVEL kobiton: caps — the same keys nested
+    // under kobiton:options are ignored (session keeps the server default name).
+    'kobiton:sessionName': input.sessionName,
+    'kobiton:sessionDescription': input.sessionDescription ?? '',
+    // deviceGroup + captureScreenshots ARE honored nested under kobiton:options.
     'kobiton:options': {
-      sessionName: input.sessionName,
-      sessionDescription: input.sessionDescription ?? '',
       deviceGroup: input.deviceGroup ?? 'ORGANIZATION',
       captureScreenshots: true,
     },
