@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DevicesResponseSchema } from '../api/devices';
+import type { DevicesResponse } from '../api/devices';
 import { allocateFixedFromDevices, evaluateAvailability, allDevices } from './fixed-allocator';
 import { DeviceUnavailableError, FixedDeviceNotFoundError } from './errors';
 import type { FixedAllocationRequest } from './types';
 
 const raw = JSON.parse(readFileSync(new URL('../fixtures/allocation-devices.sample.json', import.meta.url), 'utf8'));
-const pool = allDevices(DevicesResponseSchema.parse(raw));
+const pool = allDevices(raw as DevicesResponse);
 
 const fixed = (udid: string, extra: Partial<FixedAllocationRequest> = {}): FixedAllocationRequest => ({
   mode: 'fixed',

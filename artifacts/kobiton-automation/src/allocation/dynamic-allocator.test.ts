@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DevicesResponseSchema, devicesForGroup, type KobitonDevice } from '../api/devices';
+import { devicesForGroup, type DevicesResponse, type KobitonDevice } from '../api/devices';
 import {
   allocateFromDevices,
   filterByCriteria,
@@ -13,7 +13,7 @@ import { NoMatchingDeviceError } from './errors';
 import type { DynamicAllocationRequest } from './types';
 
 const raw = JSON.parse(readFileSync(new URL('../fixtures/allocation-devices.sample.json', import.meta.url), 'utf8'));
-const res = DevicesResponseSchema.parse(raw);
+const res = raw as DevicesResponse;
 const priv = res.privateDevices;
 const all = devicesForGroup(res, 'ALL');
 

@@ -1,18 +1,34 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import {
-  DevicesResponseSchema,
-  filterDevices,
-  devicesForGroup,
-  DevicesClient,
-  type DevicesResponse,
-} from './devices';
+import { filterDevices, devicesForGroup, DevicesClient, type DevicesResponse } from './devices';
 import { KobitonHttpClient } from './http';
 
-const raw = JSON.parse(readFileSync(new URL('../fixtures/devices.sample.json', import.meta.url), 'utf8'));
-const res: DevicesResponse = DevicesResponseSchema.parse(raw);
+const rawV2 = readFileSync(new URL('../fixtures/devices.sample.json', import.meta.url), 'utf8');
+
+function clientReturning(json: string, status = 200, statusText = 'OK'): DevicesClient {
+  const fetchImpl: typeof fetch = async () =>
+    new Response(json, { status, statusText, headers: { 'content-type': 'application/json' } });
+  const http = new KobitonHttpClient({
+    auth: { username: 'tester', authorizationHeader: 'Basic dGVzdDp0ZXN0' },
+    fetchImpl,
+  });
+  return new DevicesClient(http);
+}
+
+// Normalise the v2 snake_case fixture once for the pure-function tests.
+const res: DevicesResponse = await clientReturning(rawV2).listRaw();
 const priv = res.privateDevices;
+
+test('listRaw normalises v2 snake_case into the camelCase domain model', () => {
+  const d = priv[0];
+  assert.equal(d.deviceName, 'iPhone 15');
+  assert.equal(d.platformName, 'iOS');
+  assert.equal(d.platformVersion, '26.2');
+  assert.equal(d.isOnline, true);
+  assert.equal(d.modelName, 'iPhone15,4');
+  assert.equal(d.tags, undefined); // tags are not on /v2/devices
+});
 
 test('filter by platform (ANDROID) returns only Android devices', () => {
   const ids = filterDevices(priv, { platform: 'ANDROID' }).map((d) => d.id);
@@ -42,14 +58,7 @@ test('devicesForGroup selects the right array', () => {
 });
 
 test('DevicesClient.list parses the response, selects group, and filters', async () => {
-  const fetchImpl: typeof fetch = async () =>
-    new Response(JSON.stringify(raw), { status: 200, headers: { 'content-type': 'application/json' } });
-  const http = new KobitonHttpClient({
-    auth: { username: 'tester', authorizationHeader: 'Basic dGVzdDp0ZXN0' },
-    fetchImpl,
-  });
-  const client = new DevicesClient(http);
-
+  const client = clientReturning(rawV2);
   const privateAvailableAndroid = await client.list({ group: 'PRIVATE', platform: 'ANDROID', available: true });
   assert.deepEqual(privateAvailableAndroid.map((d) => d.id).sort(), [3]);
 
@@ -58,11 +67,6 @@ test('DevicesClient.list parses the response, selects group, and filters', async
 });
 
 test('DevicesClient surfaces a typed error on non-2xx', async () => {
-  const fetchImpl: typeof fetch = async () => new Response('nope', { status: 401, statusText: 'Unauthorized' });
-  const http = new KobitonHttpClient({
-    auth: { username: 'tester', authorizationHeader: 'Basic dGVzdDp0ZXN0' },
-    fetchImpl,
-  });
-  const client = new DevicesClient(http);
+  const client = clientReturning('nope', 401, 'Unauthorized');
   await assert.rejects(() => client.list(), /unauthorized/);
 });

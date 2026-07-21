@@ -11,10 +11,12 @@ export function describeCriteria(criteria: {
   model?: string;
   platformVersion?: string;
   deviceGroup?: DeviceGroup;
+  team?: string;
   tags?: string[];
 }): string {
   const parts: string[] = [];
-  parts.push(`group=${criteria.deviceGroup ?? 'PRIVATE'}`);
+  parts.push(`pool=${criteria.deviceGroup ?? 'PRIVATE'}`);
+  if (criteria.team) parts.push(`team="${criteria.team}"`);
   if (criteria.platform) parts.push(`platform=${criteria.platform}`);
   if (criteria.model) parts.push(`model~"${criteria.model}"`);
   if (criteria.platformVersion) parts.push(`version=${criteria.platformVersion}`);
@@ -57,6 +59,18 @@ export class NoMatchingDeviceError extends Error {
       `No available device for { ${d.criteria} }: ${d.matched} matched the criteria but none were free` +
       (misses.length ? ` (${misses.join(', ')}).` : '.')
     );
+  }
+}
+
+/** A `--team` name didn't match any team from `/v2/teams`. */
+export class TeamNotFoundError extends Error {
+  readonly team: string;
+
+  constructor(team: string, available: string[]) {
+    const list = available.length ? available.map((n) => `"${n}"`).join(', ') : '(none visible)';
+    super(`No team named "${team}". Available teams: ${list}.`);
+    this.name = 'TeamNotFoundError';
+    this.team = team;
   }
 }
 

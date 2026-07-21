@@ -7,17 +7,22 @@
  * Read-only: selects and describes a device, never opens a session.
  */
 import { devicesForGroup, type DevicesClient, type KobitonDevice } from '../api/devices';
+import type { TeamsClient } from '../api/teams';
+import type { TagsClient } from '../api/tags';
 import { buildCapabilities } from './capabilities';
-import { NoMatchingDeviceError, describeCriteria } from './errors';
+import { NoMatchingDeviceError, TeamNotFoundError, describeCriteria } from './errors';
 import { createLogger, silentLogger, type Logger } from './logger';
 import { getStrategy } from './strategy';
 import type { AllocationResult, DynamicAllocationRequest } from './types';
 
-/** Flatten a device's private + public tags into a single list. */
+/** A device's assigned tag names (from `/v2/tags/devices`, merged onto the device). */
 export function deviceTags(device: KobitonDevice): string[] {
-  const t = device.tags;
-  if (!t) return [];
-  return [...(t.private_tags ?? []), ...(t.public_tags ?? [])];
+  return device.tags ?? [];
+}
+
+/** Merge a udid → tag-names map onto devices in place. */
+export function annotateTags(devices: KobitonDevice[], tagMap: Map<string, string[]>): void {
+  for (const d of devices) d.tags = tagMap.get(d.udid) ?? [];
 }
 
 /**
@@ -137,22 +142,37 @@ export function allocateFromDevices(
   };
 }
 
-/** Query-backed dynamic allocator over the turn-1 devices client. */
+export interface DynamicAllocatorDeps {
+  devices: DevicesClient;
+  teams: TeamsClient;
+  tags: TagsClient;
+}
+
+/** Query-backed dynamic allocator over the v2 devices/teams/tags clients. */
 export class DynamicAllocator {
   constructor(
-    private readonly devices: DevicesClient,
+    private readonly clients: DynamicAllocatorDeps,
     private readonly logger: Logger = createLogger(),
   ) {}
 
   async allocate(req: DynamicAllocationRequest): Promise<AllocationResult> {
-    if (req.groupName) {
-      this.logger.info(
-        `NOTE: groupName "${req.groupName}" is advisory only — the Kobiton read API exposes no ` +
-          `device→team mapping, so it cannot filter devices. Use deviceGroup + tags. (See README.)`,
-      );
+    // Resolve a team name → id (real device-group targeting via /v2/teams).
+    let teamId: number | undefined;
+    if (req.team) {
+      const team = await this.clients.teams.resolveByName(req.team);
+      if (!team) throw new TeamNotFoundError(req.team, (await this.clients.teams.list()).map((t) => t.name));
+      teamId = team.id;
+      this.logger.info(`team "${team.name}" → id ${team.id} (${team.devicesCount ?? '?'} devices)`);
     }
-    const res = await this.devices.listRaw();
+
+    const res = await this.clients.devices.listRaw(teamId);
     const pool = devicesForGroup(res, req.deviceGroup ?? 'PRIVATE');
+
+    // Tags live only in /v2/tags/devices — merge them on when tag filtering is requested.
+    if (req.tags?.length) {
+      annotateTags(pool, await this.clients.tags.taggedDevices());
+    }
+
     return allocateFromDevices(pool, req, { logger: this.logger });
   }
 }

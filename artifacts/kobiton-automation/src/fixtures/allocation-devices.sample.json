@@ -13,7 +13,7 @@
       "isReserved": false,
       "state": "ACTIVATED",
       "location": "Atlanta - US",
-      "tags": { "private_tags": ["ci"], "public_tags": [] }
+      "tags": ["ci"]
     },
     {
       "id": 11,
@@ -28,7 +28,7 @@
       "isReserved": false,
       "state": "UTILIZING",
       "location": "Atlanta - US",
-      "tags": { "private_tags": [], "public_tags": [] }
+      "tags": []
     },
     {
       "id": 12,
@@ -43,7 +43,7 @@
       "isReserved": true,
       "state": "ACTIVATED",
       "location": "Atlanta - US",
-      "tags": { "private_tags": [], "public_tags": [] }
+      "tags": []
     },
     {
       "id": 13,
@@ -58,7 +58,7 @@
       "isReserved": false,
       "state": "DISCONNECTED",
       "location": "Christophers House",
-      "tags": { "private_tags": [], "public_tags": [] }
+      "tags": []
     },
     {
       "id": 14,
@@ -73,7 +73,7 @@
       "isReserved": false,
       "state": "ACTIVATED",
       "location": "Atlanta - US",
-      "tags": { "private_tags": [], "public_tags": ["regression"] }
+      "tags": ["regression"]
     },
     {
       "id": 15,
@@ -88,7 +88,7 @@
       "isReserved": false,
       "state": "ACTIVATED",
       "location": "Atlanta - US",
-      "tags": { "private_tags": [], "public_tags": [] }
+      "tags": []
     },
     {
       "id": 16,
@@ -103,7 +103,7 @@
       "isReserved": false,
       "state": "UTILIZING",
       "location": "Atlanta - US",
-      "tags": { "private_tags": [], "public_tags": [] }
+      "tags": []
     }
   ],
   "favoriteDevices": [],
@@ -121,9 +121,7 @@
       "isReserved": false,
       "state": "ACTIVATED",
       "location": "US",
-      "tags": { "private_tags": ["ci"], "public_tags": [] }
+      "tags": ["ci"]
     }
-  ],
-  "virtualDevices": [],
-  "softBookDeviceIds": []
+  ]
 }

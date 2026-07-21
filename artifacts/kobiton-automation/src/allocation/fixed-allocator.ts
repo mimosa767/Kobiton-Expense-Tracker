@@ -19,7 +19,7 @@ export function evaluateAvailability(device: KobitonDevice): DeviceAvailability 
 
 /** Every device across all pools, so a udid is found wherever it lives. */
 export function allDevices(res: DevicesResponse): KobitonDevice[] {
-  return [...res.privateDevices, ...res.cloudDevices, ...res.favoriteDevices, ...res.virtualDevices];
+  return [...res.privateDevices, ...res.cloudDevices, ...res.favoriteDevices];
 }
 
 /** Pure fixed selection over a device pool — the unit-tested core. */

@@ -2,8 +2,9 @@
 /**
  * `kobiton-automation` CLI.
  *
- * Working subcommands (read-only, hit the live API):
- *   devices list           list devices with filters
+ * Working subcommands (read-only, hit the live v2 API):
+ *   devices list           list devices with filters (optionally --team scoped)
+ *   teams                  list Kobiton teams (the device groups)
  *   apps list              list apps (keyword/platform)
  *   apps resolve <bundle>  resolve latest version by bundle id / package name
  *   allocate               select a device (fixed/dynamic) + print Appium caps
@@ -24,10 +25,20 @@ import {
   FixedDeviceNotFoundError,
   DeviceUnavailableError,
   UnknownStrategyError,
+  TeamNotFoundError,
   type AllocationResult,
   type DynamicAllocationRequest,
   type FixedAllocationRequest,
 } from './allocation/index';
+import type { KobitonClient } from './api/index';
+
+/** Resolve a team name → team id via /v2/teams, or undefined when no name given. */
+async function resolveTeamId(client: KobitonClient, name: string | undefined): Promise<number | undefined> {
+  if (!name) return undefined;
+  const team = await client.teams.resolveByName(name);
+  if (!team) throw new TeamNotFoundError(name, (await client.teams.list()).map((t) => t.name));
+  return team.id;
+}
 
 // Case-insensitive: accepts `android`/`ANDROID`/`iOS` etc., normalises to
 // ANDROID | IOS. (`.choices()` would reject lowercase.)
@@ -47,7 +58,7 @@ function toPlatform(value: string | undefined): DevicePlatform | undefined {
 const program = new Command();
 program
   .name('kobiton-automation')
-  .description('Vendor-agnostic Kobiton automation toolkit (Phase 1: read-only API + stubs).')
+  .description('Vendor-agnostic Kobiton automation toolkit (read-only v2 API + allocator).')
   // Custom flags so the program-level version option doesn't shadow
   // `allocate --version <platformVersion>` (the documented allocate flag).
   .version('0.0.0', '-V, --cli-version', 'output the CLI version');
@@ -60,16 +71,19 @@ devices
   .description('List devices (read-only).')
   .addOption(platformOption())
   .addOption(
-    new Option('-g, --group <group>', 'device group').choices(['PRIVATE', 'CLOUD', 'ALL']).default('PRIVATE'),
+    new Option('-g, --group <group>', 'device pool').choices(['PRIVATE', 'CLOUD', 'ALL']).default('PRIVATE'),
   )
+  .option('-t, --team <name>', 'scope to a Kobiton team (device group)')
   .option('-n, --name <substring>', 'filter by device name (partial, case-insensitive)')
   .option('--online', 'only online devices')
   .option('--available', 'only available devices (online, not booked, not reserved)')
   .option('--json', 'print raw JSON instead of a table')
   .action(async (opts) => {
     const client = createKobitonClient();
+    const teamId = await resolveTeamId(client, opts.team);
     const list = await client.devices.list({
       group: opts.group as DeviceGroup,
+      teamId,
       platform: toPlatform(opts.platform),
       deviceName: opts.name,
       online: opts.online ? true : undefined,
@@ -106,7 +120,25 @@ apps
     }
     console.log(`${list.length} app(s):`);
     for (const a of list) {
-      console.log(`  [${a.id}] ${a.name} (${a.os ?? '?'}) — ${a.versions.length} version(s)`);
+      console.log(`  [${a.id}] ${a.name} (${a.os ?? '?'}) — ${a.versionCount ?? '?'} version(s)`);
+    }
+  });
+
+// ---- teams (device groups) --------------------------------------------------
+program
+  .command('teams')
+  .description('List Kobiton teams — the device groups (read-only).')
+  .option('--json', 'print raw JSON instead of a table')
+  .action(async (opts) => {
+    const client = createKobitonClient();
+    const teams = await client.teams.list();
+    if (opts.json) {
+      console.log(JSON.stringify(teams, null, 2));
+      return;
+    }
+    console.log(`${teams.length} team(s):`);
+    for (const t of teams) {
+      console.log(`  [${t.id}] ${t.name} — ${t.devicesCount ?? '?'} device(s), ${t.membersCount ?? '?'} member(s)`);
     }
   });
 
@@ -188,8 +220,8 @@ program
   .addOption(
     new Option('-g, --group <group>', 'device pool to search').choices(['PRIVATE', 'CLOUD', 'ALL']).default('PRIVATE'),
   )
-  .option('--group-name <name>', 'user-team name (advisory only — the read API has no device→team mapping)')
-  .option('--tags <tags>', 'comma-separated tags; a device must carry ALL of them')
+  .option('-t, --team <name>', 'Kobiton team name — the real device-group filter (via /v2/teams)')
+  .option('--tags <tags>', 'comma-separated tags; a device must carry ALL of them (from /v2/tags/devices)')
   .option('--exclude-udids <udids>', 'comma-separated udids to skip (retry hook)', csv)
   .option('-s, --strategy <name>', 'selection strategy', 'first-available')
   .option('-a, --app <ref>', 'app capability, e.g. kobiton-store:v765569')
@@ -225,12 +257,15 @@ program
       model: opts.model,
       platformVersion: opts.version,
       deviceGroup: opts.group as DeviceGroup,
-      groupName: opts.groupName,
+      team: opts.team,
       tags: opts.tags ? csv(opts.tags) : undefined,
       options: { excludeUdids: opts.excludeUdids, strategy: opts.strategy },
       ...capInput,
     };
-    const result = await new DynamicAllocator(client.devices, logger).allocate(req);
+    const result = await new DynamicAllocator(
+      { devices: client.devices, teams: client.teams, tags: client.tags },
+      logger,
+    ).allocate(req);
     printAllocation(result, Boolean(opts.json));
   });
 
@@ -250,7 +285,8 @@ program.parseAsync(argv).catch((err: unknown) => {
     err instanceof NoMatchingDeviceError ||
     err instanceof FixedDeviceNotFoundError ||
     err instanceof DeviceUnavailableError ||
-    err instanceof UnknownStrategyError
+    err instanceof UnknownStrategyError ||
+    err instanceof TeamNotFoundError
   ) {
     console.error(err.message);
   } else {

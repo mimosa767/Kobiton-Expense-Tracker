@@ -41,15 +41,14 @@ export interface DynamicAllocationRequest extends AllocationCapabilityInput {
   model?: string;
   /** Exact (e.g. "16") or major-version prefix (e.g. "16" matches "16.1"). */
   platformVersion?: string;
-  /** Which device pool to search: PRIVATE (default), CLOUD, or ALL. */
+  /** Which device pool to search within the results: PRIVATE (default), CLOUD, or ALL. */
   deviceGroup?: DeviceGroup;
   /**
-   * A user-team name. ADVISORY ONLY: the Kobiton read API exposes no
-   * device→team mapping, so this cannot filter devices — it is recorded and a
-   * warning is logged. Real "group" targeting is deviceGroup + tags. See README.
+   * A Kobiton team name — the real device-group filter. Resolved to a team id
+   * via `/v2/teams`, then the fleet is scoped with `GET /v2/devices?teamId=`.
    */
-  groupName?: string;
-  /** Require the device to carry ALL of these tags (private or public). */
+  team?: string;
+  /** Require the device to carry ALL of these tags (from `/v2/tags/devices`). */
   tags?: string[];
   options?: AllocationOptions;
 }

@@ -1,65 +1,104 @@
 /**
- * Devices client for `GET /v1/devices`.
+ * Devices client for `GET /v2/devices`.
  *
- * The endpoint returns devices grouped into top-level arrays (privateDevices,
- * cloudDevices, favoriteDevices, virtualDevices, …). Individual device objects
- * are large; we validate only the fields this toolkit relies on and
- * `.passthrough()` the rest so unexpected fields never break parsing.
+ * The v2 endpoint returns devices grouped into snake_case top-level arrays
+ * (`private_devices`, `cloud_devices`, `favorite_devices`,
+ * `ita_trial_cloud_devices`, …) and every device field is snake_case. To keep
+ * the rest of the toolkit (allocator, CLI, tests) stable and API-shape-agnostic,
+ * we parse the raw v2 shape and NORMALISE it into a camelCase domain model
+ * ({@link KobitonDevice}) at this boundary. Nothing downstream sees snake_case.
  *
- * NOTE (verified against the live API 2026-07-14): device objects carry NO
- * numeric device-group id, so `groupId` filtering is not available from this
- * response — group membership is expressed only as which top-level array a
- * device lives in (private vs cloud). Filtering therefore happens client-side.
+ * Device-group targeting (resolved 2026-07-21): Kobiton "groups" are **teams**
+ * (see teams.ts). `GET /v2/devices?teamId={id}` scopes the fleet to a team —
+ * that is the real group filter. Individual v2 device objects carry NO team id
+ * and NO tags; tags come from the separate `/v2/tags/devices` resource
+ * (see tags.ts) and are merged onto {@link KobitonDevice.tags} by the allocator.
  */
 import { z } from 'zod';
 import type { KobitonHttpClient } from './http';
 
-export const DeviceSchema = z
+/** Raw v2 device (snake_case). Only the fields we use are declared. */
+const RawDeviceSchema = z
   .object({
     id: z.number(),
     udid: z.string(),
-    deviceName: z.string(),
-    platformName: z.string(), // "Android" | "iOS"
-    platformVersion: z.string(),
-    isOnline: z.boolean(),
-    isBooked: z.boolean(),
-    isCloud: z.boolean(),
-    isReserved: z.boolean().optional().default(false),
-    // Verified live: `state` is usually a string ("ACTIVATED") but can be null
-    // on some private devices and absent on favoriteDevices — keep it lenient.
+    device_name: z.string(),
+    platform_name: z.string(), // "Android" | "iOS"
+    platform_version: z.string(),
+    is_online: z.boolean(),
+    is_booked: z.boolean(),
+    is_cloud: z.boolean(),
+    is_reserved: z.boolean().optional().default(false),
+    model_name: z.string().nullable().optional(),
     state: z.string().nullable().optional(),
     location: z.string().nullable().optional(),
-    // Verified live 2026-07-21: the marketing/model name (e.g. "SM-G998U1") sits
-    // alongside `deviceName` ("Galaxy S21 Ultra 5G"). Model matching uses
-    // `deviceName`; `modelName` is carried for display/diagnostics.
-    modelName: z.string().nullable().optional(),
-    // Verified live 2026-07-21: device tags arrive as
-    // `{ private_tags: string[], public_tags: string[] }` (both empty in this
-    // org today). This is the closest thing to device-group targeting the read
-    // API exposes — see allocation/ + README "device-groups gap".
-    tags: z
-      .object({
-        private_tags: z.array(z.string()).default([]),
-        public_tags: z.array(z.string()).default([]),
-      })
-      .partial()
-      .nullable()
-      .optional(),
   })
   .passthrough();
 
-export type KobitonDevice = z.infer<typeof DeviceSchema>;
-
-export const DevicesResponseSchema = z
+const RawDevicesResponseSchema = z
   .object({
-    privateDevices: z.array(DeviceSchema).default([]),
-    cloudDevices: z.array(DeviceSchema).default([]),
-    favoriteDevices: z.array(DeviceSchema).default([]),
-    virtualDevices: z.array(DeviceSchema).default([]),
+    private_devices: z.array(RawDeviceSchema).default([]),
+    cloud_devices: z.array(RawDeviceSchema).default([]),
+    ita_trial_cloud_devices: z.array(RawDeviceSchema).default([]),
+    // Verified live: `favorite_devices` are THIN reference objects ({id, udid}),
+    // not full device records — parse leniently and keep only the full ones
+    // (a favorite is always also present in private/cloud, so nothing is lost).
+    favorite_devices: z.array(z.unknown()).default([]),
   })
   .passthrough();
 
-export type DevicesResponse = z.infer<typeof DevicesResponseSchema>;
+/** Keep only array elements that fully match the (full) device schema. */
+function parseFullDevices(items: unknown[]): KobitonDevice[] {
+  const out: KobitonDevice[] = [];
+  for (const item of items) {
+    const parsed = RawDeviceSchema.safeParse(item);
+    if (parsed.success) out.push(toDomain(parsed.data));
+  }
+  return out;
+}
+
+type RawDevice = z.infer<typeof RawDeviceSchema>;
+
+/** Normalised, camelCase domain device — the stable shape used everywhere else. */
+export interface KobitonDevice {
+  id: number;
+  udid: string;
+  deviceName: string;
+  platformName: string; // "Android" | "iOS"
+  platformVersion: string;
+  isOnline: boolean;
+  isBooked: boolean;
+  isReserved: boolean;
+  isCloud: boolean;
+  modelName?: string | null;
+  state?: string | null;
+  location?: string | null;
+  /** Tag names merged from `/v2/tags/devices` (undefined until annotated). */
+  tags?: string[];
+}
+
+export interface DevicesResponse {
+  privateDevices: KobitonDevice[];
+  cloudDevices: KobitonDevice[];
+  favoriteDevices: KobitonDevice[];
+}
+
+function toDomain(raw: RawDevice): KobitonDevice {
+  return {
+    id: raw.id,
+    udid: raw.udid,
+    deviceName: raw.device_name,
+    platformName: raw.platform_name,
+    platformVersion: raw.platform_version,
+    isOnline: raw.is_online,
+    isBooked: raw.is_booked,
+    isReserved: raw.is_reserved ?? false,
+    isCloud: raw.is_cloud,
+    modelName: raw.model_name ?? null,
+    state: raw.state ?? null,
+    location: raw.location ?? null,
+  };
+}
 
 export type DeviceGroup = 'PRIVATE' | 'CLOUD' | 'ALL';
 export type DevicePlatform = 'ANDROID' | 'IOS';
@@ -106,21 +145,28 @@ export function devicesForGroup(res: DevicesResponse, group: DeviceGroup): Kobit
 export interface ListDevicesOptions extends DeviceFilter {
   /** Defaults to PRIVATE. */
   group?: DeviceGroup;
+  /** Scope the fleet to a Kobiton team (device group). See teams.ts. */
+  teamId?: number;
 }
 
 export class DevicesClient {
   constructor(private readonly http: KobitonHttpClient) {}
 
-  /** Raw, validated `GET /v1/devices` response (all groups). */
-  async listRaw(): Promise<DevicesResponse> {
-    const json = await this.http.get('/v1/devices');
-    return DevicesResponseSchema.parse(json);
+  /** Raw, validated + normalised `GET /v2/devices` response (all groups). */
+  async listRaw(teamId?: number): Promise<DevicesResponse> {
+    const json = await this.http.get('/v2/devices', teamId ? { teamId } : undefined);
+    const raw = RawDevicesResponseSchema.parse(json);
+    return {
+      privateDevices: raw.private_devices.map(toDomain),
+      cloudDevices: [...raw.cloud_devices, ...raw.ita_trial_cloud_devices].map(toDomain),
+      favoriteDevices: parseFullDevices(raw.favorite_devices),
+    };
   }
 
-  /** Devices in `group` (default PRIVATE), narrowed by the given filter. */
+  /** Devices in `group` (default PRIVATE), optionally team-scoped, filtered. */
   async list(opts: ListDevicesOptions = {}): Promise<KobitonDevice[]> {
-    const { group = 'PRIVATE', ...filter } = opts;
-    const res = await this.listRaw();
+    const { group = 'PRIVATE', teamId, ...filter } = opts;
+    const res = await this.listRaw(teamId);
     return filterDevices(devicesForGroup(res, group), filter);
   }
 }

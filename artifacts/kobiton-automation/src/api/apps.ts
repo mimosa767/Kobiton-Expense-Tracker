@@ -1,78 +1,102 @@
 /**
- * Apps client for `GET /v1/apps` (+ `GET /v1/apps/:id`) and the "latest version
- * by package/bundle id" resolver.
+ * Apps client for `GET /v2/apps` and the "latest version by package/bundle id"
+ * resolver.
  *
- * Verified against the live API 2026-07-14:
- *  - `GET /v1/apps` with NO `page` param returns every app in one response
- *    (`currentPage: null`); `?page=N` paginates at 20/page. We use the
- *    single-shot form and filter client-side.
- *  - Each version in the list carries `nativeProperties`, where the installable
- *    identifier lives: Android → `nativeProperties.package`, iOS →
- *    `nativeProperties.CFBundleIdentifier`. The single-app GET also exposes a
- *    top-level `packageName`.
- *  - `os` ("IOS" | "ANDROID") is present on list items but NOT on the single-app
- *    GET, so platform filtering is best-effort when `os` is absent.
+ * Verified against the live v2 API 2026-07-21:
+ *  - `GET /v2/apps` paginates: `{ apps, current_page, total_items, current_size }`.
+ *    Default page size is 20; `?size=N` widens it (verified up to 200) and
+ *    `?keyword=` filters by name server-side. We page with size=200.
+ *  - Each app embeds `latest_version` with `native_properties`, where the
+ *    installable identifier lives: Android → `native_properties.package`,
+ *    iOS → `native_properties.CFBundleIdentifier`. No need to sort versions.
+ *  - `os` is "IOS" | "ANDROID".
+ *
+ * As with devices.ts, the raw snake_case v2 shape is normalised into a stable
+ * camelCase domain model at this boundary.
  */
 import { z } from 'zod';
 import type { KobitonHttpClient } from './http';
 import type { DevicePlatform } from './devices';
 
-export const AppVersionSchema = z
+const PAGE_SIZE = 200;
+
+const RawVersionSchema = z
   .object({
     id: z.number(),
     version: z.string().optional(),
-    createdAt: z.string().optional(),
+    created_at: z.string().optional(),
     state: z.string().optional(),
-    // Verified live: can be null on some versions — tolerate it.
-    nativeProperties: z.record(z.any()).nullable().optional(),
+    native_properties: z.record(z.any()).nullable().optional(),
   })
   .passthrough();
 
-export type AppVersion = z.infer<typeof AppVersionSchema>;
-
-export const AppSchema = z
+const RawAppSchema = z
   .object({
     id: z.number(),
     name: z.string(),
-    os: z.string().optional(), // "IOS" | "ANDROID" (list only)
+    os: z.string().optional(), // "IOS" | "ANDROID"
     state: z.string().optional(),
-    packageName: z.string().optional(), // single-app GET only
-    versions: z.array(AppVersionSchema).default([]),
+    version_count: z.number().optional(),
+    latest_version: RawVersionSchema.nullable().optional(),
   })
   .passthrough();
 
-export type App = z.infer<typeof AppSchema>;
-
-export const AppsListResponseSchema = z
+const RawAppsResponseSchema = z
   .object({
-    apps: z.array(AppSchema).default([]),
-    currentPage: z.number().nullable().optional(),
+    apps: z.array(RawAppSchema).default([]),
+    current_page: z.number().nullable().optional(),
+    total_items: z.number().nullable().optional(),
+    current_size: z.number().nullable().optional(),
   })
   .passthrough();
+
+type RawApp = z.infer<typeof RawAppSchema>;
+type RawVersion = z.infer<typeof RawVersionSchema>;
+
+/** Normalised domain app (camelCase) with its latest version only. */
+export interface App {
+  id: number;
+  name: string;
+  os?: string;
+  versionCount?: number;
+  latestVersion?: AppVersion;
+}
+
+export interface AppVersion {
+  id: number;
+  version?: string;
+  createdAt?: string;
+  nativeProperties?: Record<string, unknown> | null;
+}
+
+function versionToDomain(raw: RawVersion | null | undefined): AppVersion | undefined {
+  if (!raw) return undefined;
+  return {
+    id: raw.id,
+    version: raw.version,
+    createdAt: raw.created_at,
+    nativeProperties: raw.native_properties ?? null,
+  };
+}
+
+function appToDomain(raw: RawApp): App {
+  return {
+    id: raw.id,
+    name: raw.name,
+    os: raw.os,
+    versionCount: raw.version_count,
+    latestVersion: versionToDomain(raw.latest_version),
+  };
+}
 
 /** Extract the installable identifier (bundle id / package name) from a version. */
-export function packageIdFromVersion(version: AppVersion): string | undefined {
-  const np = version.nativeProperties ?? {};
+export function packageIdFromVersion(version: AppVersion | undefined): string | undefined {
+  const np = version?.nativeProperties ?? {};
   const androidPkg = np['package'];
   if (typeof androidPkg === 'string' && androidPkg.length > 0) return androidPkg;
   const iosBundle = np['CFBundleIdentifier'];
   if (typeof iosBundle === 'string' && iosBundle.length > 0) return iosBundle;
   return undefined;
-}
-
-/** Newest version by `createdAt` (tie-break: higher `id`). */
-export function latestVersion(versions: AppVersion[]): AppVersion | undefined {
-  if (versions.length === 0) return undefined;
-  return [...versions].sort(compareVersionsNewestFirst)[0];
-}
-
-function compareVersionsNewestFirst(a: AppVersion, b: AppVersion): number {
-  const ta = a.createdAt ? Date.parse(a.createdAt) : NaN;
-  const tb = b.createdAt ? Date.parse(b.createdAt) : NaN;
-  const va = Number.isNaN(ta) ? 0 : ta;
-  const vb = Number.isNaN(tb) ? 0 : tb;
-  if (vb !== va) return vb - va;
-  return b.id - a.id;
 }
 
 export interface ResolvedApp {
@@ -92,9 +116,12 @@ export interface ResolveOptions {
 }
 
 /**
- * Resolve the latest app version whose installable identifier equals `bundleId`
- * (case-insensitive). When `platform` is given, apps whose `os` is known and
- * different are skipped. Returns `undefined` when nothing matches.
+ * Resolve the app whose latest-version installable identifier equals `bundleId`
+ * (case-insensitive). When `platform` is given, apps whose `os` differs are
+ * skipped. The Kobiton expense-tracker app shares one bundle id across iOS and
+ * Android, so when several apps match (no platform given) the newest
+ * latest-version wins (by `createdAt`, tie-break higher version id). Returns
+ * `undefined` when nothing matches.
  */
 export function resolveLatestByPackage(
   apps: App[],
@@ -106,20 +133,23 @@ export function resolveLatestByPackage(
 
   for (const app of apps) {
     if (opts.platform && app.os && app.os.toUpperCase() !== opts.platform) continue;
-    for (const version of app.versions) {
-      const pid = packageIdFromVersion(version);
-      if (pid && pid.toLowerCase() === target) matches.push({ app, version });
-    }
+    const version = app.latestVersion;
+    const pid = packageIdFromVersion(version);
+    if (version && pid && pid.toLowerCase() === target) matches.push({ app, version });
   }
 
   if (matches.length === 0) return undefined;
-  matches.sort((a, b) => compareVersionsNewestFirst(a.version, b.version));
+  matches.sort((a, b) => {
+    const ta = a.version.createdAt ? Date.parse(a.version.createdAt) : 0;
+    const tb = b.version.createdAt ? Date.parse(b.version.createdAt) : 0;
+    if (tb !== ta) return tb - ta;
+    return b.version.id - a.version.id;
+  });
   const { app, version } = matches[0];
-
   return {
     appId: app.id,
     appName: app.name,
-    packageId: packageIdFromVersion(version) ?? bundleId,
+    packageId: packageIdFromVersion(version)!,
     versionId: version.id,
     versionLabel: version.version,
     createdAt: version.createdAt,
@@ -129,7 +159,7 @@ export function resolveLatestByPackage(
 }
 
 export interface ListAppsOptions {
-  /** Partial, case-insensitive match on the app name (filtered client-side). */
+  /** Partial, case-insensitive match on the app name (filtered server-side). */
   keyword?: string;
   platform?: DevicePlatform;
 }
@@ -137,27 +167,24 @@ export interface ListAppsOptions {
 export class AppsClient {
   constructor(private readonly http: KobitonHttpClient) {}
 
-  /** Every app in one request (no pagination), validated. */
-  async listAll(): Promise<App[]> {
-    const json = await this.http.get('/v1/apps');
-    return AppsListResponseSchema.parse(json).apps;
-  }
-
-  /** Apps filtered by platform / keyword (both client-side). */
-  async list(opts: ListAppsOptions = {}): Promise<App[]> {
-    let apps = await this.listAll();
-    if (opts.platform) apps = apps.filter((a) => (a.os ?? '').toUpperCase() === opts.platform);
-    if (opts.keyword) {
-      const k = opts.keyword.toLowerCase();
-      apps = apps.filter((a) => a.name.toLowerCase().includes(k));
+  /** Every app, paging through `/v2/apps` at size=200, normalised. */
+  async listAll(keyword?: string): Promise<App[]> {
+    const all: App[] = [];
+    for (let page = 1; page <= 100; page++) {
+      const json = await this.http.get('/v2/apps', { page, size: PAGE_SIZE, keyword });
+      const res = RawAppsResponseSchema.parse(json);
+      all.push(...res.apps.map(appToDomain));
+      const total = res.total_items ?? all.length;
+      if (res.apps.length === 0 || all.length >= total) break;
     }
-    return apps;
+    return all;
   }
 
-  /** Single app with its versions. */
-  async get(appId: number): Promise<App> {
-    const json = await this.http.get(`/v1/apps/${appId}`);
-    return AppSchema.parse(json);
+  /** Apps filtered by platform / keyword (keyword server-side, platform client-side). */
+  async list(opts: ListAppsOptions = {}): Promise<App[]> {
+    let apps = await this.listAll(opts.keyword);
+    if (opts.platform) apps = apps.filter((a) => (a.os ?? '').toUpperCase() === opts.platform);
+    return apps;
   }
 
   /** Resolve the latest version for a bundle id / package name across all apps. */
