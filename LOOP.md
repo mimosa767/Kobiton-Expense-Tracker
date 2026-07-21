@@ -109,6 +109,26 @@ are COMPLETE and accepted; do NOT redo. Details in git history + ## Log.]
 
 ## RESULT (from CC)
 
+### CORRECTION to turn-5 iOS finding (post-turn, Stephen-directed retry, 2026-07-21 14:34 EDT).
+
+My turn-5 iOS conclusion ("iOS FAILS at resigning … likely the injection SDK") was
+**WRONG** — retract it. Stephen challenged it; a retry disproved it. The SAME build
+(690060/v766511, image-injection instrumented, embeds KobitonSdk.framework)
+**installed + launched successfully on iPhone 12 Pro Max / iOS 18.5** →
+isAppInstalled=true, queryAppState=4, ~27s, **Kobiton session 8806542** (COMPLETE).
+So Kobiton DOES resign+install this injection app on iOS; the `AppSigningError` is
+**device/OS-specific, not app-specific**:
+- resign FAILED: iPhone 14 Pro (18.6), iPhone SE 3rd gen (18.6), iPhone 13 (26.2.1)
+- resign OK: iPhone 12 Pro Max (18.5)
+Same app throughout. The engine's dynamic re-allocation converted a failing device
+(iPhone 13) into a green deploy (iPhone 12 Pro Max) — the resilience path working live.
+Tentative (NOT proven, n=4): 18.5 works vs 18.6/26.x fail could be newer-iOS signing
+strictness or per-device/transient state — needs Kobiton-side logs to confirm; the
+failed attempts create no session record (die at app-prep), so root-causing the
+device-specific failures needs Kobiton support. My earlier "it's the injection SDK /
+need a non-instrumented build" guidance is withdrawn. No code change; verified/read-only
+diagnostics + one live retry (session 8806542).
+
 ### Turn 5 done — Scenario 6 at scale + naming fix + lock committed. Status: NEEDS_CHAT.
 
 **Commits on `kobiton-automation`:** `2289538` (naming fix + kobiton session id +
@@ -423,3 +443,4 @@ read-only. Naming call I made unilaterally: `--team` (new) vs overloading
 | 2026-07-21 13:51 EDT | CC | Turn 4: built appium/session.ts (wd/hub, loadHubCredentials, thin wrapper, buildDeployCapabilities install-via-appium:app+fullReset) + deployment/{types,deploy-engine,report} — DeployEngine.run: resolve app→allocate(fixed/dynamic incl team/tags)→worker pool (concurrency cap 3, retries, dynamic re-allocate on session-fail via DynamicPool)→pipeline session/verify-installed/activate/verify-state/terminate(finally)→JSON+CSV+console reports; first-class dry-run; real `deploy` CLI. 53/53 tests (11 new, mocked session). Live: dry-run (27 Pixels/3 avail); REAL 1-device run Pixel 8 Pro 3B100DLJG000ZK → installed, appState 4, 19.5s, 1/0. Session `bulk-deploy 2026-07-21T17:50:25.481Z — Pixel 8 Pro` id a9ec47e4-f36f-4741-8a1f-896bd54a4a5b for MCP cross-check. Android queryAppState works (=4). Item 0 lockfile: STOPPED/committed nothing — regenerate necessarily drags e2e-tests (committed webdriverio dep, absent from HEAD lock); chat's call. Commit 085b9d9 (code only). No camera/testID/destructive/EAS | NEEDS_CHAT |
 | 2026-07-21 13:56 EDT | CHAT | Accepted turn 4 after INDEPENDENT MCP verification: Kobiton session 8806359 = Pixel 8 Pro AUTO COMPLETE ~19s, expensetracker MainActivity launch recorded server-side, video captured — engine's claims confirmed. Found naming gap: server shows default session name, custom name cap not honored. Wrote turn 5 TASK: lockfile FINAL CALL (commit regenerated lock — HEAD lock provably stale re: committed e2e-tests webdriverio), session naming fix (+re-verify), multi-device Android run 2-3 devices conc 2 (THE Scenario 6 demo), iOS 1-device run (findings-tolerant), README. Stretch + MCP turns still deferred | NEEDS_CC |
 | 2026-07-21 14:10 EDT | CC | Turn 5: (0) LOCKFILE COMMITTED d30837d — reconciled stale HEAD lock (adds kobiton-automation + committed-e2e-tests webdriverio importers; explained not-churn); 53 tests pass against it. (1) Session naming FIXED — Kobiton honors sessionName only as TOP-LEVEL kobiton:sessionName (nested kobiton:options ignored); also captured numeric kobiton:session id into results; probe 8806389 + REST readback confirm. (2) Multi-device Android 3/0: Pixel 10 Pro XL/8 Pro/10, concurrency 2, sessions 8806411/8806410/8806415 named bulk-deploy…, state COMPLETE (MCP cross-check ready). (3) iOS run FAILS at resigning (AppSigningError on embedded KobitonSdk.framework) — engine re-allocated iPhone 14 Pro→iPhone SE correctly, 0/1, clean; app-signing issue not toolkit bug. (4) README updated (deploy usage, cap rationale, findings). commit 2289538. my-pkg typecheck 0, root red only on pre-existing e2e/mockup. No camera/testID/destructive/EAS | NEEDS_CHAT |
+| 2026-07-21 14:34 EDT | CC | CORRECTION (Stephen-directed retry, not a task): turn-5 iOS "fails at resigning / injection SDK" finding was WRONG — retracted. Retry installed the SAME injection build (v766511) successfully on iPhone 12 Pro Max iOS 18.5 (session 8806542, queryAppState=4). Failures are device/OS-specific (18.6 + 26.x failed; 18.5 ok), not app/SDK-inherent; dynamic re-allocation turned a failing iPhone 13 into a green deploy. Root cause of device-specific resign failures needs Kobiton-side logs (failed attempts leave no session record). No code change. Status unchanged | NEEDS_CHAT |
