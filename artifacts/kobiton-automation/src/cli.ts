@@ -8,10 +8,8 @@
  *   apps list              list apps (keyword/platform)
  *   apps resolve <bundle>  resolve latest version by bundle id / package name
  *   allocate               select a device (fixed/dynamic) + print Appium caps
- *
- * Stubs (parse flags, print, do nothing else yet):
- *   deploy                 bulk app deploy (Scenario 6, turn 3) — refuses to run
- *                          without --dry-run or --confirm
+ *   deploy                 bulk-deploy an app across devices (install/verify/report);
+ *                          refuses to run without --dry-run or --confirm
  *
  * Primary invocation is `pnpm --filter @workspace/kobiton-automation run cli -- <args>`.
  */
@@ -31,6 +29,7 @@ import {
   type FixedAllocationRequest,
 } from './allocation/index';
 import type { KobitonClient } from './api/index';
+import { DeployEngine, toConsoleSummary, writeReports, type DeployPlan } from './deployment/index';
 
 /** Resolve a team name → team id via /v2/teams, or undefined when no name given. */
 async function resolveTeamId(client: KobitonClient, name: string | undefined): Promise<number | undefined> {
@@ -54,6 +53,14 @@ const platformOption = () =>
 function toPlatform(value: string | undefined): DevicePlatform | undefined {
   return value ? (value.toUpperCase() as DevicePlatform) : undefined;
 }
+
+const csv = (v: string) =>
+  v
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+const toInt = (v: string) => Number.parseInt(v, 10);
 
 const program = new Command();
 program
@@ -169,35 +176,86 @@ apps
 // ---- deploy (stub) ----------------------------------------------------------
 program
   .command('deploy')
-  .description('[stub] Bulk-deploy an app across a device group (Scenario 6, turn 3).')
-  .addOption(platformOption())
-  .option('-g, --group <group>', 'target device group')
-  .option('-a, --app <ref>', 'app to deploy (id, kobiton-store ref, or bundle id)')
-  .option('-c, --concurrency <n>', 'max parallel installs', (v) => Number.parseInt(v, 10))
-  .option('--dry-run', 'plan only; make no changes')
-  .option('--confirm', 'actually run (mutually required with a non-dry-run)')
-  .action((opts) => {
+  .description('Bulk-deploy an app across target devices (install + verify + report).')
+  .requiredOption('-p, --platform <platform>', 'ANDROID | IOS', (v) => {
+    const up = v.toUpperCase();
+    if (up !== 'ANDROID' && up !== 'IOS') throw new InvalidArgumentError('Allowed values: ANDROID, IOS.');
+    return up;
+  })
+  .option('-b, --bundle-id <id>', 'app bundle id / package (resolved to the latest version)')
+  .option('--app-version-id <id>', 'explicit Kobiton app version id (alternative to --bundle-id)', toInt)
+  .option('--udids <a,b>', 'explicit device udids (fixed targets)', csv)
+  .option('-m, --model <name>', 'dynamic: device model (partial match)')
+  .option('-v, --version <v>', 'dynamic: platform version (exact or major-version prefix)')
+  .option('-t, --team <name>', 'dynamic: Kobiton team (device group)')
+  .option('--tags <a,b>', 'dynamic: device must carry ALL tags', csv)
+  .addOption(
+    new Option('-g, --group <group>', 'dynamic: device pool').choices(['PRIVATE', 'CLOUD', 'ALL']).default('PRIVATE'),
+  )
+  .option('--max <n>', 'dynamic: max devices to target', toInt)
+  .option('-c, --concurrency <n>', 'parallel installs (default 2, cap 3)', toInt)
+  .option('-r, --retries <n>', 'per-device retries after the first attempt (default 1)', toInt)
+  .option('--no-full-reset', 'skip the uninstall-before-install (fullReset)')
+  .option('--report-dir <dir>', 'directory for JSON/CSV reports', './reports')
+  .option('--dry-run', 'plan only; create no sessions')
+  .option('--confirm', 'actually run')
+  .option('--json', 'print the full run result as JSON')
+  .action(async (opts) => {
     if (!opts.dryRun && !opts.confirm) {
       console.error('Refusing to run `deploy` without --dry-run or --confirm (guardrail).');
       process.exitCode = 1;
       return;
     }
-    console.log(`[stub] deploy — not implemented yet (turn 3). Mode: ${opts.dryRun ? 'DRY-RUN' : 'CONFIRMED'}.`);
-    console.log('  options:', {
-      group: opts.group,
-      app: opts.app,
-      platform: opts.platform,
-      concurrency: opts.concurrency,
+    if (!opts.bundleId && !opts.appVersionId) {
+      console.error('deploy needs --bundle-id <id> or --app-version-id <id>.');
+      process.exitCode = 1;
+      return;
+    }
+
+    const client = createKobitonClient();
+    const engine = new DeployEngine({
+      apps: client.apps,
+      devices: client.devices,
+      teams: client.teams,
+      tags: client.tags,
+      logger: createLogger(),
     });
+
+    const dynamic = !opts.udids?.length;
+    const plan: DeployPlan = {
+      bundleId: opts.bundleId,
+      appVersionId: opts.appVersionId,
+      platform: toPlatform(opts.platform)!,
+      udids: opts.udids,
+      criteria: dynamic
+        ? {
+            model: opts.model,
+            platformVersion: opts.version,
+            team: opts.team,
+            tags: opts.tags,
+            deviceGroup: opts.group as DeviceGroup,
+          }
+        : undefined,
+      maxDevices: opts.max,
+      concurrency: opts.concurrency,
+      retries: opts.retries,
+      dryRun: Boolean(opts.dryRun),
+      fullReset: opts.fullReset, // commander sets false when --no-full-reset
+    };
+
+    const run = await engine.run(plan);
+
+    if (opts.json) console.log(JSON.stringify(run, null, 2));
+    else console.log(toConsoleSummary(run));
+
+    if (!run.dryRun) {
+      const { jsonPath, csvPath } = writeReports(run, opts.reportDir);
+      console.error(`reports written: ${jsonPath} , ${csvPath}`);
+      if (run.failed > 0) process.exitCode = 1;
+    }
   });
 
 // ---- allocate (read-only) ---------------------------------------------------
-const csv = (v: string) =>
-  v
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-
 function printAllocation(result: AllocationResult, asJson: boolean): void {
   if (asJson) {
     console.log(JSON.stringify(result, null, 2));

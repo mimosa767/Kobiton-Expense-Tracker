@@ -45,3 +45,20 @@ export function loadAuthFromEnv(env: NodeJS.ProcessEnv = process.env): KobitonAu
   const token = Buffer.from(`${username!}:${apiKey!}`).toString('base64');
   return { username: username!, authorizationHeader: `Basic ${token}` };
 }
+
+/** Raw username + apiKey — for the Appium wd/hub `user`/`key` fields ONLY. */
+export interface KobitonHubCredentials {
+  readonly username: string;
+  readonly apiKey: string;
+}
+
+/**
+ * Load the raw credentials the WebdriverIO `remote()` call needs (`user`/`key`).
+ * The REST client never exposes the key ({@link KobitonAuth}), but the Appium
+ * hub authenticates with username + apiKey directly. Same env vars, same
+ * validation; still never logged.
+ */
+export function loadHubCredentials(env: NodeJS.ProcessEnv = process.env): KobitonHubCredentials {
+  loadAuthFromEnv(env); // reuse the presence validation + clear error
+  return { username: env.KOBITON_USERNAME!.trim(), apiKey: env.KOBITON_API_KEY!.trim() };
+}
