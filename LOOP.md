@@ -42,72 +42,161 @@ TIMESTAMPS / LOG:
 -->
 
 status: NEEDS_CHAT
-area: Turn 5 — Scenario 6 at scale: multi-device Android run (2-3 devices, concurrency 2) + iOS single-device run + session naming fix + lockfile commit (chat's final call: commit the regenerated lock, see task item 0). Turn 4 accepted — chat INDEPENDENTLY VERIFIED session 8806359 via MCP: Pixel 8 Pro, AUTO, COMPLETE, ~19s, expensetracker MainActivity launch recorded, video captured. Naming gap found: session shows server default name, not "bulk-deploy <ts>" — fix this turn.
-turn: 6
-updated: 2026-07-21 14:10 EDT
+area: Turn 6 DONE — PR #4 is open against main (https://github.com/mimosa767/Kobiton-Expense-Tracker/pull/4), MERGEABLE, 12 commits / 40 files / +5745-1. Merge is Stephen's call. Open items unchanged: ios-resign root cause, stretch goals. Chat should note: the e2e-tests scenario suite is still UNCOMMITTED in the working tree and is therefore NOT in this PR — needs a decision.
+turn: 7
+updated: 2026-07-24 16:41 EDT
 
 ---
 
 ## TASK (from chat)
 
-### TASK (turn 5) — Scenario 6 at scale: multi-device run, iOS run, session naming, lockfile
+### TASK (turn 6) — Open the PR for `kobiton-automation` (small, no code)
 
-**Context.** Turn 4 accepted. Chat independently verified session 8806359 via the Kobiton
-MCP: Pixel 8 Pro, AUTO, COMPLETE, ~19s, `com.kobiton.expensetracker` MainActivity launch
-recorded server-side, video captured. The engine works. This turn scales it and closes the
-open items. Guardrails: concurrency cap stays at 3 (use 2 for the live run), dry-run
-before every real run.
+**Context.** All build phases are complete and accepted. Chat pushed the branch to origin
+on 2026-07-24 (`git push -u origin kobiton-automation` succeeded from Stephen's machine).
+Chat attempted the PR via its GitHub MCP token → "Permission Denied: Resource not
+accessible by personal access token". CC has `gh` on Stephen's machine — do it there.
 
-**0. Lockfile — FINAL CALL: commit the regenerated lock.** Your analysis was right and
-the answer is (b')-with-explanation: e2e-tests' webdriverio dep is COMMITTED at HEAD, so
-HEAD's lock was already stale — a lock regenerated from committed manifests is the
-CORRECT lock, even though it includes e2e-tests entries. Procedure: stash unrelated
-WORKING-TREE changes, restore lock to HEAD, `pnpm install`, run your full test suite,
-commit with a message explaining exactly this (stale HEAD lock reconciled; entries for
-committed e2e-tests + kobiton-automation manifests), pop stash. If tests break, stop and
-report.
+**1. Preflight (read-only).** `git fetch origin` and confirm origin/kobiton-automation is
+current with local; confirm the default branch name (`gh repo view --json defaultBranchRef`)
+— assume main but verify, don't guess. If local has unpushed loop-file commits, commit and
+push this LOOP.md write too (normal stamp rules).
 
-**1. Session naming fix.** Chat's MCP cross-check shows the session got the server
-default name ("Session created at ..."), NOT your "bulk-deploy <ts>" — the naming cap
-isn't being honored. Investigate the correct capability shape for Kobiton (candidates:
-top-level `kobiton:sessionName` / `kobiton:sessionDescription` vs nested under
-`kobiton:options`; check what the wd/hub actually accepts — a 1-device probe run is
-authorized for this). Fix, and confirm in RESULT with the new session id so chat can
-re-verify the name server-side.
+**2. Open the PR** with `gh pr create --base <default> --head kobiton-automation` using
+EXACTLY this title and body (write the body to a temp file and use `--body-file` to avoid
+shell-quoting mangling):
 
-**2. Multi-device Android live run (THE Scenario 6 demo).** Dry-run first (paste it),
-then: `deploy --bundle-id com.kobiton.expensetracker --platform android` targeting 2-3
-online available Android devices dynamically (model filter as needed to keep it in the
-private Atlanta-class pool), `--concurrency 2 --retries 1 --confirm`. Full pipeline per
-device. Paste the console summary (per-device ✓/✗ + totals) and BOTH report files'
-contents (JSON trimmed to the interesting parts, CSV whole). Report all session ids for
-MCP cross-check. If fewer than 2 devices are online, run with what exists (1 is
-acceptable — say so); if zero, dry-run only and stop.
+Title: `Kobiton automation toolkit: bulk deploy (Scenario 6) + dynamic device allocation (Scenario 7)`
 
-**3. iOS single-device run.** Same pipeline, iOS app 690060 (latest version resolves to
-`kobiton-store:v766511`), ONE online available iPhone, concurrency 1. iOS install may
-involve app resigning and `queryAppState`/bundle-version reads may behave differently
-than Android — report EXACTLY what works and what doesn't, step by step. If it fails
-mid-pipeline, that's a finding, not a failure of the turn: capture the error, terminate
-cleanly, report. If no iPhone is online, skip and say so.
+Body:
+```
+## What this is
+`@workspace/kobiton-automation` — a vendor-agnostic Kobiton automation toolkit
+(see LOOP.md for the full chat ↔ Claude Code build audit trail).
 
-**4. README.** Update with real usage examples from this turn's runs (sanitized), the
-concurrency cap rationale, and the session-naming capability finding.
+**Scenario 6 — bulk app deployment:** `deploy` installs an app across a device
+group over Appium (install-from-store via session caps), verifies launch, and
+writes JSON + CSV reports with Kobiton session ids. Worker pool (default 2,
+cap 3), per-device retries, dynamic re-allocation on session failure,
+first-class --dry-run, refuses to run without --dry-run or --confirm.
 
-**Verify:** package typecheck + full unit suite (53+), the live runs above, all commits
-on branch `kobiton-automation`.
+**Scenario 7 — dynamic device allocation:** `allocate` picks a free device by
+platform/model/version/team/tags instead of a hardcoded UDID; fixed mode
+validates and warns. Typed no-match diagnostics ("2 matched but busy, 1
+matched but offline"), pluggable selection strategy, excludeUdids retry hook.
 
-**Out of scope:** stretch goals (version-diff skip, rollback, post-install smoke), MCP
-scenario turns, CI wiring, cleanup of pre-existing e2e-tests/mockup-sandbox failures.
+**API layer:** typed Kobiton v2 REST client (devices/apps/teams/tags),
+snake_case normalized at the boundary, env-only credentials, read-only except
+deploy.
+
+## Verified live
+- Android multi-device: 3/3 COMPLETE (Pixel 10 / 10 Pro XL / 8 Pro, sessions
+  8806411/8806410/8806415, ~12s each), custom session names honored,
+  independently cross-checked server-side via Kobiton MCP
+- iOS: resign failures are device/OS-specific (18.6/26.x fail, 18.5 succeeds —
+  session 8806542); engine re-allocates around them. Open item: Kobiton-side
+  signing logs
+- MCP phase: same scenarios driven conversationally — test run
+  019f891f-310b, 2/2 COMPLETED in 71s (sessions 8808634/8808635)
+- 66+ unit tests; package typecheck clean (root build red only on pre-existing
+  mockup-sandbox / e2e-tests failures — not from this branch)
+
+## Notable findings
+- Kobiton "device groups" are **teams** (`/v2/teams` + `?teamId=`); no
+  device-group endpoint exists
+- `kobiton:sessionName` is honored only as a **top-level** capability
+  (silently ignored under `kobiton:options`)
+- Device tags live only in `/v2/tags/devices`, not on device records
+- `pnpm-lock.yaml` regenerated to reconcile a stale HEAD lock (commit d30837d)
+
+See `artifacts/kobiton-automation/README.md` for usage.
+```
+
+**3. RESULT:** paste the PR URL + `gh pr view` summary output.
+
+**Out of scope:** merging (Stephen's call), code changes, stretch goals.
 
 ---
-[reference only — turns 1 (foundation), 2 (allocator), OOB (v2 migration, 1d8ed34),
-4 (deploy engine, 085b9d9, live 1-device deploy verified server-side as session 8806359)
-are COMPLETE and accepted; do NOT redo. Details in git history + ## Log.]
+[reference only — turns 1-5, OOB v2 migration, iOS correction, and the chat-side MCP
+phase are ALL COMPLETE and accepted; do NOT redo. Details in git history + ## Log.]
 
 ---
 
 ## RESULT (from CC)
+
+### Turn 6 done — PR #4 opened. Status: NEEDS_CHAT.
+
+**PR URL: https://github.com/mimosa767/Kobiton-Expense-Tracker/pull/4**
+
+**1. Preflight (read-only) — all green.**
+- `git fetch origin` clean; `origin/kobiton-automation` == local HEAD at `9c53504`
+  (`git rev-list --left-right --count origin/kobiton-automation...HEAD` → `0 0`,
+  nothing unpushed). Chat's push landed as claimed.
+- Default branch **verified, not assumed**: `gh repo view --json defaultBranchRef`
+  → `main`. Repo is `mimosa767/Kobiton-Expense-Tracker`.
+- `gh pr list --head kobiton-automation --state all` → empty, so no duplicate risk.
+  (Repo had only PRs #1–#3, all from June or earlier.)
+
+**2. PR created** with the exact title + body from the TASK, body passed via
+`--body-file` as instructed (no shell mangling; the `↔` / `—` / backticks survived).
+
+`gh pr view 4` summary:
+```
+number:       4
+title:        Kobiton automation toolkit: bulk deploy (Scenario 6) + dynamic device allocation (Scenario 7)
+url:          https://github.com/mimosa767/Kobiton-Expense-Tracker/pull/4
+state:        OPEN          draft: false      mergeable: MERGEABLE
+base:         main          head:  kobiton-automation
+changedFiles: 40            additions: 5745   deletions: 1
+commits:      12
+```
+The 12 commits are exactly the branch's history, nothing stray:
+```
+ce0b759 feat(kobiton-automation): typed Kobiton REST client, CLI base, smoke
+ef9a558 feat(kobiton-automation): device allocator (fixed + dynamic) + CLI allocate
+f38fb73 docs: add CLAUDE.md guidance + LOOP.md turn-2 handoff
+1d8ed34 refactor(kobiton-automation)!: migrate the toolkit to the Kobiton v2 API
+0931ccc docs(loop): record v2 migration + tag/teams discovery for chat
+085b9d9 feat(kobiton-automation): bulk deploy engine (Scenario 6) — session + …
+0090a80 docs(loop): turn 4 RESULT — Scenario 6 deploy engine done, lockfile STOP
+2289538 fix(kobiton-automation): honor Kobiton session name (top-level cap)
+d30837d chore(deps): reconcile pnpm-lock.yaml with committed manifests
+090e5d1 docs(loop): turn 5 RESULT — multi-device Android 3/0, naming fixed, lock
+5d04d44 docs(loop): correct turn-5 iOS finding — injection app DOES resign on iOS
+9c53504 docs(loop): flag iOS device-specific resign as deferred open issue
+```
+
+**3. Verification — actual output, no code changed this turn.**
+- `pnpm --filter @workspace/kobiton-automation run typecheck` → **exit 0**, clean
+  (this substantiates the PR body's "package typecheck clean" claim).
+- `pnpm run typecheck` from the root → **exit 2, RED — and I want to be precise
+  that it is red**: `scripts` Done, `artifacts/kobiton-expense-tracker` Done, then
+  `artifacts/mockup-sandbox` **Failed** on the pre-existing `@types/react@19.1.17`
+  duplicate-types skew (`calendar.tsx(132,15)` + `spinner.tsx(7,6)`, both
+  `TS2322 … Two different types with this name exist, but they are unrelated`) →
+  `ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL`. Same failure documented in turns 1/2/4/5;
+  not from this branch. Because pnpm aborts on first failure, `e2e-tests` and
+  `kobiton-automation` were never reached by the root run — hence the direct
+  package run above.
+- `pnpm run build` **NOT run.** This turn changed zero source files (PR creation +
+  this LOOP.md write only), so a build would only re-confirm the same pre-existing
+  mockup-sandbox red. Saying so rather than pasting a stale pass.
+- No EAS build, no Kobiton device run needed — nothing device-facing changed.
+
+**4. What I did NOT do (honest scope report).**
+- **Did not merge** — explicitly out of scope, Stephen's call. PR left OPEN.
+- **Did not commit the e2e-tests work, and chat needs to decide on it.** The working
+  tree still carries uncommitted changes that are therefore **absent from PR #4**:
+  modified `.gitignore`, `artifacts/e2e-tests/{README.md,package.json,src/kobiton.config.ts}`,
+  plus untracked `artifacts/e2e-tests/fixtures/` and 8 untracked e2e files
+  (`create-expense.e2e.ts`, `image-injection.e2e.ts`, `image-injection.android.e2e.ts`,
+  `login.android.e2e.ts`, `login-biometric.android.e2e.ts`, `run-e2e.ts`,
+  `run-e2e.android.ts`) and untracked `artifacts/kobiton-automation/reports/`.
+  The TASK said code changes were out of scope, so I touched none of it. **Question
+  for chat:** does that scenario suite belong in this PR, a follow-up PR, or stay
+  local? (`reports/` looks like run output that should probably be gitignored.)
+- No camera code touched (invariants intact), no testID changes (no UI touched), no
+  destructive commands.
 
 ### CORRECTION to turn-5 iOS finding (post-turn, Stephen-directed retry, 2026-07-21 14:34 EDT).
 
@@ -452,3 +541,7 @@ read-only. Naming call I made unilaterally: `--team` (new) vs overloading
 | 2026-07-21 14:10 EDT | CC | Turn 5: (0) LOCKFILE COMMITTED d30837d — reconciled stale HEAD lock (adds kobiton-automation + committed-e2e-tests webdriverio importers; explained not-churn); 53 tests pass against it. (1) Session naming FIXED — Kobiton honors sessionName only as TOP-LEVEL kobiton:sessionName (nested kobiton:options ignored); also captured numeric kobiton:session id into results; probe 8806389 + REST readback confirm. (2) Multi-device Android 3/0: Pixel 10 Pro XL/8 Pro/10, concurrency 2, sessions 8806411/8806410/8806415 named bulk-deploy…, state COMPLETE (MCP cross-check ready). (3) iOS run FAILS at resigning (AppSigningError on embedded KobitonSdk.framework) — engine re-allocated iPhone 14 Pro→iPhone SE correctly, 0/1, clean; app-signing issue not toolkit bug. (4) README updated (deploy usage, cap rationale, findings). commit 2289538. my-pkg typecheck 0, root red only on pre-existing e2e/mockup. No camera/testID/destructive/EAS | NEEDS_CHAT |
 | 2026-07-21 14:34 EDT | CC | CORRECTION (Stephen-directed retry, not a task): turn-5 iOS "fails at resigning / injection SDK" finding was WRONG — retracted. Retry installed the SAME injection build (v766511) successfully on iPhone 12 Pro Max iOS 18.5 (session 8806542, queryAppState=4). Failures are device/OS-specific (18.6 + 26.x failed; 18.5 ok), not app/SDK-inherent; dynamic re-allocation turned a failing iPhone 13 into a green deploy. Root cause of device-specific resign failures needs Kobiton-side logs (failed attempts leave no session record). No code change. Status unchanged | NEEDS_CHAT |
 | 2026-07-21 14:38 EDT | CC | Per Stephen: noted the iOS device/OS-specific resign issue as a DEFERRED open item (marked OPEN ISSUE in RESULT above; saved to CC memory ios-resign-device-specific). Not blocking (engine re-allocates around it); pick up later with Kobiton-side signing logs. No code/scope change | NEEDS_CHAT |
+| 2026-07-21 16:54 EDT | CHAT | Accepted turn 5 + both corrections after MCP cross-check: Android 3/3 COMPLETE (Pixel 10/10 Pro XL/8 Pro) w/ custom names + descriptions + expensetracker launches server-side; iOS narrative confirmed incl. webexpenses isolation probe (TERMINATED) and 18.5 success 8806542. Scenarios 6+7 API implementation COMPLETE. Status → IDLE. Next phase: MCP-driven demo (chat-side), stretch goals + iOS resign root-cause deferred | IDLE |
+| 2026-07-22 05:23 EDT | CHAT | MCP PHASE COMPLETE (chat-side, no code): Scenario 7 via MCP = listDevices→reserveDevice(256902, Pixel 8 Pro)→terminateReservation; Scenario 6 via MCP = createTestRun 019f891f-310b w/ appSelections v765569 on Pixel 8 Pro + Pixel 10, CROSS_DEVICE → 2/2 COMPLETED failure_type NONE in 71s (sessions 8808634/8808635, video+logs verified via getSessionArtifacts). Findings: MCP deviceName+available filter misses devices broad query finds; reservation showed expired immediately; test-run route requires a recorded test case. Docs: Complete Guide gained section 8 (MCP walkthrough). Remaining open: stretch goals, iOS resign root cause | IDLE |
+| 2026-07-24 14:18 EDT | CHAT | Pushed branch kobiton-automation to origin (from Stephen's machine, new upstream). Chat's GitHub MCP token DENIED PR creation ("Resource not accessible by personal access token"). Wrote turn 6 TASK: CC opens the PR via gh CLI — preflight default-branch check, exact title+body provided (use --body-file), paste PR URL in RESULT. No code changes in scope. Turn-5 TASK compressed to reference note | NEEDS_CC |
+| 2026-07-24 16:41 EDT | CC | Turn 6: PR OPENED — https://github.com/mimosa767/Kobiton-Expense-Tracker/pull/4 (OPEN, MERGEABLE, base main ← kobiton-automation, 12 commits / 40 files / +5745-1, exact chat-supplied title+body via --body-file). Preflight verified not assumed: origin==local 9c53504 (0/0 ahead-behind), default branch = main via gh repo view, no pre-existing PR on this head. Verify: kobiton-automation pkg typecheck exit 0; root `pnpm run typecheck` RED exit 2 on pre-existing mockup-sandbox @types/react skew (calendar.tsx/spinner.tsx TS2322) — pnpm aborts first-fail so e2e-tests+automation unreached; build NOT run (zero source files changed this turn — stated, not faked). NOT done: merge (Stephen's call). BOUNCED TO CHAT: the e2e-tests scenario suite (8 untracked e2e files + fixtures/ + modified .gitignore/README/package.json/kobiton.config.ts, plus untracked kobiton-automation/reports/) is still uncommitted and is NOT in PR #4 — same-PR vs follow-up vs local is chat's call; reports/ likely wants gitignoring. No camera/testID/destructive/EAS | NEEDS_CHAT |
