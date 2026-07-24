@@ -42,9 +42,9 @@ TIMESTAMPS / LOG:
 -->
 
 status: NEEDS_CHAT
-area: Turn 6 DONE — PR #4 is open against main (https://github.com/mimosa767/Kobiton-Expense-Tracker/pull/4), MERGEABLE, 12 commits / 40 files / +5745-1. Merge is Stephen's call. Open items unchanged: ios-resign root cause, stretch goals. Chat should note: the e2e-tests scenario suite is still UNCOMMITTED in the working tree and is therefore NOT in this PR — needs a decision.
+area: SUPERSEDED SAME DAY BY STEPHEN'S DECISION — the toolkit now lives in its OWN repo: https://github.com/mimosa767/kobiton-device-automation (private, mimosa767, history preserved via subtree split). PR #4 CLOSED UNMERGED; artifacts/kobiton-automation REMOVED from this monorepo (commit be044ab). The new repo is the single source of truth — chat should do future toolkit work THERE, not here. Still open: e2e-tests suite uncommitted (stays in this repo, needs a decision), ios-resign root cause, stretch goals.
 turn: 7
-updated: 2026-07-24 16:41 EDT
+updated: 2026-07-24 16:50 EDT
 
 ---
 
@@ -124,7 +124,77 @@ phase are ALL COMPLETE and accepted; do NOT redo. Details in git history + ## Lo
 
 ## RESULT (from CC)
 
-### Turn 6 done — PR #4 opened. Status: NEEDS_CHAT.
+### OUT-OF-BAND (Stephen-directed, not a chat TASK) — toolkit EXTRACTED to its own repo, 2026-07-24 16:50 EDT.
+
+Stephen asked for a dedicated repo for the automation work and chose, via explicit
+prompt: **owner/visibility = `mimosa767` private, name = `kobiton-device-automation`,
+history = preserve, monorepo copy = new repo is the ONLY home.** So turn 6's PR #4 is
+now moot — I closed it. **Chat: do future toolkit work in the new repo, not here.**
+
+**New repo: https://github.com/mimosa767/kobiton-device-automation** — PRIVATE,
+owner `mimosa767`, default branch `main`, 40 tracked files, 6 commits.
+
+**1. History preserved, not faked.** `git subtree split --prefix=artifacts/kobiton-automation`
+carried the 5 commits that actually touched the package, paths rewritten to the repo
+root (`95b3946` REST client → `69e01b6` allocator → `de3a493` v2 migration →
+`41207e3` deploy engine → `8f1f25f` session-name fix). LOOP-only commits correctly
+excluded. One new commit `87e69e0` on top does the decoupling.
+
+**2. Decoupling (all of it was needed; extraction was otherwise clean).** There were
+**no `@workspace/*` code imports** — only doc comments — so nothing had to be rewritten
+in the logic. Changed:
+- `package.json` → name `kobiton-device-automation`; the three **`catalog:` specifiers
+  resolved to concrete ranges** (`zod ^3.25.76`, `@types/node ^25.3.3`, `tsx ^4.21.0`)
+  since there's no workspace catalog to read anymore; pinned `packageManager pnpm@10.33.0`,
+  `engines.node >=24`.
+- `tsconfig.json` → **inlined the former `../../tsconfig.base.json`** and dropped
+  `customConditions: ["workspace"]`, which only meant anything inside the monorepo.
+- docs → `pnpm --filter @workspace/kobiton-automation run X` becomes `pnpm run X`
+  (3 source comments + 13 README lines).
+- new `.gitignore` (node_modules, `.env`, `reports/`) and `.npmrc` **carrying over
+  `minimumReleaseAge=1440`** — the workspace's supply-chain defense would otherwise
+  have been silently lost on extraction.
+- own `pnpm-lock.yaml` (no longer covered by the workspace lock).
+
+**3. Verified standalone BEFORE creating anything on GitHub:**
+```
+pnpm install    → Done in 1.8s, clean
+pnpm run typecheck → exit 0 (clean)
+pnpm run test      → tests 53 | pass 53 | fail 0
+```
+Note for chat: **PR #4's body claimed "66+ unit tests" — the real number is 53**
+(3+15+6+3+7+8+7+4 across the 8 test files), matching turn 5's count. Worth not
+repeating that figure in the new repo's docs.
+
+**4. Monorepo retired as instructed.**
+- **PR #4 CLOSED unmerged** with a comment pointing at the new repo.
+- **`artifacts/kobiton-automation` removed** — commit `be044ab`, a separate reviewable
+  commit as promised: 38 files, 3795 deletions.
+- **Lockfile handled the safe way.** Dropping a workspace package leaves a stale
+  importer, and reconciling naively would have dragged in the uncommitted e2e-tests
+  manifest changes (the exact trap from turns 2/4). Used turn 5's blessed technique:
+  `git stash -u` → `git rm -r` → `pnpm install` → commit → `git stash pop`. Result is
+  surgical: **`pnpm-lock.yaml` diff is 22 deletions, the removed importer only**, and
+  `grep artifacts/kobiton-automation pnpm-lock.yaml` → 0 hits.
+- Stash popped cleanly; I byte-compared the restored WIP against a pre-flight backup
+  (25 files copied to scratchpad first, in case the stash went wrong) — **identical**.
+- Post-removal `pnpm run typecheck`: `api-server` Done, `scripts` Done, **`e2e-tests`
+  Done**, `kobiton-expense-tracker` Done, `mockup-sandbox` **Failed** — the same
+  pre-existing `@types/react` skew, unchanged by this work. Nothing broke: a repo-wide
+  grep finds **zero** remaining code/config references to the removed package.
+
+**5. What I did NOT do / caveats.**
+- `artifacts/kobiton-automation/` still exists **on disk locally** holding only
+  untracked `node_modules/` and `reports/` (the real deploy-run JSON/CSV output from
+  turns 4-5, which was never committed). I deliberately did **not** delete it — that
+  output isn't recoverable from git. Delete it yourself when you don't want it.
+- The **e2e-tests suite is still uncommitted and stays in THIS repo** (8 untracked
+  files + `fixtures/` + modified `.gitignore`/README/package.json/`kobiton.config.ts`).
+  It is unrelated to the extraction and still needs the same decision as in turn 6.
+- No new-repo CI/workflows set up (not asked for). No camera code touched, no testID
+  changes, no destructive commands, no EAS build.
+
+### Turn 6 done — PR #4 opened (SUPERSEDED — see the out-of-band entry above; this PR is now CLOSED unmerged).
 
 **PR URL: https://github.com/mimosa767/Kobiton-Expense-Tracker/pull/4**
 
@@ -545,3 +615,4 @@ read-only. Naming call I made unilaterally: `--team` (new) vs overloading
 | 2026-07-22 05:23 EDT | CHAT | MCP PHASE COMPLETE (chat-side, no code): Scenario 7 via MCP = listDevices→reserveDevice(256902, Pixel 8 Pro)→terminateReservation; Scenario 6 via MCP = createTestRun 019f891f-310b w/ appSelections v765569 on Pixel 8 Pro + Pixel 10, CROSS_DEVICE → 2/2 COMPLETED failure_type NONE in 71s (sessions 8808634/8808635, video+logs verified via getSessionArtifacts). Findings: MCP deviceName+available filter misses devices broad query finds; reservation showed expired immediately; test-run route requires a recorded test case. Docs: Complete Guide gained section 8 (MCP walkthrough). Remaining open: stretch goals, iOS resign root cause | IDLE |
 | 2026-07-24 14:18 EDT | CHAT | Pushed branch kobiton-automation to origin (from Stephen's machine, new upstream). Chat's GitHub MCP token DENIED PR creation ("Resource not accessible by personal access token"). Wrote turn 6 TASK: CC opens the PR via gh CLI — preflight default-branch check, exact title+body provided (use --body-file), paste PR URL in RESULT. No code changes in scope. Turn-5 TASK compressed to reference note | NEEDS_CC |
 | 2026-07-24 16:41 EDT | CC | Turn 6: PR OPENED — https://github.com/mimosa767/Kobiton-Expense-Tracker/pull/4 (OPEN, MERGEABLE, base main ← kobiton-automation, 12 commits / 40 files / +5745-1, exact chat-supplied title+body via --body-file). Preflight verified not assumed: origin==local 9c53504 (0/0 ahead-behind), default branch = main via gh repo view, no pre-existing PR on this head. Verify: kobiton-automation pkg typecheck exit 0; root `pnpm run typecheck` RED exit 2 on pre-existing mockup-sandbox @types/react skew (calendar.tsx/spinner.tsx TS2322) — pnpm aborts first-fail so e2e-tests+automation unreached; build NOT run (zero source files changed this turn — stated, not faked). NOT done: merge (Stephen's call). BOUNCED TO CHAT: the e2e-tests scenario suite (8 untracked e2e files + fixtures/ + modified .gitignore/README/package.json/kobiton.config.ts, plus untracked kobiton-automation/reports/) is still uncommitted and is NOT in PR #4 — same-PR vs follow-up vs local is chat's call; reports/ likely wants gitignoring. No camera/testID/destructive/EAS | NEEDS_CHAT |
+| 2026-07-24 16:50 EDT | CC | OUT-OF-BAND (Stephen-directed, not a chat TASK): toolkit EXTRACTED to its own repo — https://github.com/mimosa767/kobiton-device-automation (PRIVATE, owner mimosa767, main, 40 files, 6 commits). Stephen's explicit choices: mimosa767/private, name kobiton-device-automation, preserve history, new repo = ONLY home. History real (subtree split kept the 5 package-touching commits 95b3946→8f1f25f, paths at root; LOOP-only commits excluded) + 87e69e0 decoupling. Decoupled: catalog: → concrete ranges (zod ^3.25.76, @types/node ^25.3.3, tsx ^4.21.0), inlined tsconfig.base.json + dropped customConditions workspace, --filter docs → pnpm run, new .gitignore + .npmrc CARRYING minimumReleaseAge=1440, own lockfile. Verified BEFORE creating the repo: install clean, typecheck exit 0, tests 53/53. MONOREPO RETIRED: PR #4 CLOSED unmerged (comment points at new repo); artifacts/kobiton-automation REMOVED in separate commit be044ab (38 files, -3795); lock reconciled via turn-5 stash technique → diff is 22 deletions (removed importer only), 0 grep hits, WIP byte-verified after stash pop against a 25-file backup. Post-removal typecheck: api-server/scripts/e2e-tests/expense-tracker Done, mockup-sandbox Failed (pre-existing skew). CORRECTION for chat: PR #4 body said "66+ unit tests" — real count is 53. NOT done: local untracked artifacts/kobiton-automation/reports/ left on disk on purpose (uncommitted run output, not in git); e2e-tests suite still uncommitted in THIS repo, still needs a decision; no CI in new repo. No camera/testID/destructive/EAS | NEEDS_CHAT |
