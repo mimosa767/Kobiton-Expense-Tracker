@@ -230,28 +230,6 @@ importers:
         specifier: ~5.9.2
         version: 5.9.3
 
-  artifacts/kobiton-automation:
-    dependencies:
-      commander:
-        specifier: ^12.1.0
-        version: 12.1.0
-      webdriverio:
-        specifier: ^9.20.0
-        version: 9.29.1
-      zod:
-        specifier: 'catalog:'
-        version: 3.25.76
-    devDependencies:
-      '@types/node':
-        specifier: 'catalog:'
-        version: 25.3.5
-      tsx:
-        specifier: 'catalog:'
-        version: 4.21.0
-      typescript:
-        specifier: ~5.9.2
-        version: 5.9.3
-
   artifacts/kobiton-expense-tracker:
     dependencies:
       '@hookform/resolvers':
